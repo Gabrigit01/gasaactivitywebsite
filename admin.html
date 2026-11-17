@@ -1,174 +1,125 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>UATM GASA — Dashboard Organisateur</title>
-  <link rel="stylesheet" href="admin.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#121b2c">
+  <title>Espace organisation · UATM GASA</title>
+  <link rel="icon" href="/images/logo.webp" type="image/webp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;display=swap">
+  <link rel="stylesheet" href="/admin.css">
+  <script src="/admin.js" defer></script>
 </head>
 <body>
+  <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18M8 16v-3m5 3V8m5 8V5"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18m-13 5h2m4 0h2"/></symbol>
+    <symbol id="i-comment" viewBox="0 0 24 24"><path d="M21 11.5a8 8 0 0 1-8 8H5l-2 2v-9a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"/><path d="M8 11h8m-8 4h5"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M13 5h6v6m0-6-9 9m7-3v7a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M11 5H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h5m3-12 5 5-5 5m5-5H9"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="3" width="6" height="6" rx="1"/><rect x="3" y="15" width="6" height="6" rx="1"/><path d="M15 15h3v3h3v3m-6 0h2m4-6v-2m-9-3v3h3m-9-1H4"/></symbol>
+    <symbol id="i-broadcast" viewBox="0 0 24 24"><path d="M4 10v5h5l9 4V6l-9 4H4Zm5 5 1 5m11-10v5"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5m5 0a8 8 0 1 0-2.3 5.7"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></symbol>
+  </svg>
+  <a id="skip-link" class="skip-link" href="#dashboard" hidden>Aller au contenu</a>
 
-  <!-- ÉCRAN DE VERROUILLAGE ORGANISATEUR -->
-  <div class="pin-overlay" id="pinOverlay">
-    <div class="pin-card">
-      <img src="images/logo.webp" alt="Logo UATM GASA" class="pin-logo">
-      <span class="kicker">ESPACE ORGANISATEUR</span>
-      <h2>Accès Bureau & Comité</h2>
-      <p>Entrez le code PIN organisateur pour accéder au tableau de bord.</p>
-      <form id="pinForm" class="pin-form">
-        <input type="password" id="pinInput" placeholder="••••" maxlength="6" required autofocus>
-        <button type="submit" class="btn-primary">Déverrouiller</button>
-      </form>
-      <span class="pin-error" id="pinError"></span>
-      <a href="mainpage.html" class="back-site-link">Retour au site étudiant</a>
-    </div>
-  </div>
+  <div id="boot" class="boot-status" role="status">Chargement de l’espace organisation…</div>
 
-  <!-- INTERFACE PRINCIPALE DU DASHBOARD -->
-  <div class="admin-layout" id="adminApp" style="display: none;">
-    
-    <!-- BARRE LATÉRALE -->
-    <aside class="sidebar">
-      <div class="sidebar-top">
-        <div class="brand-box">
-          <img src="images/logo.webp" alt="UATM GASA">
-          <div>
-            <strong>UATM GASA</strong>
-            <span>Comité Activités</span>
-          </div>
-        </div>
-
-        <nav class="side-nav">
-          <a href="#section-kpis" class="side-link active">Vue d'ensemble</a>
-          <a href="#section-sondages" class="side-link">Résultats Sondages</a>
-          <a href="#section-commentaires" class="side-link">Modération Avis</a>
-          <a href="#section-etudiants" class="side-link">Profils & Export</a>
-        </nav>
+  <main id="login" class="login-shell" hidden>
+    <section class="login-photo" aria-label="Vie étudiante du campus">
+      <div class="brand">
+        <img src="/images/logo.webp" alt="" width="42" height="42">
+        <div><strong>UATM GASA</strong><span>Vie étudiante</span></div>
       </div>
+      <p>La vie du campus<br><em>se construit ensemble.</em></p>
+    </section>
+    <section class="login-panel">
+      <div class="login-card">
+        <div class="login-tools">
+          <span class="icon-tile"><svg class="icon"><use href="#i-lock"/></svg></span>
+          <label class="theme-picker"><span>Thème</span><select data-admin-theme><option value="light">Clair</option><option value="dark">Sombre</option></select></label>
+        </div>
+        <h1>Espace organisation</h1>
+        <p>Connectez-vous pour gérer les séances du campus.</p>
+        <form id="login-form" class="stack">
+          <label id="admin-login-user">Identifiant <input type="text" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64"></label>
+          <label>Mot de passe <input type="password" name="password" required autocomplete="current-password"></label>
+          <p id="login-error" class="form-message error" role="alert" hidden></p>
+          <button type="submit" class="button primary">Se connecter <svg class="icon"><use href="#i-arrow"/></svg></button>
+        </form>
+        <a class="return-link" href="/mainpage.html">Retour au site étudiant <svg class="icon"><use href="#i-external"/></svg></a>
+      </div>
+    </section>
+  </main>
 
-      <div class="sidebar-bottom">
-        <a href="mainpage.html" target="_blank" class="btn-outline full-w">Voir le site public</a>
-        <button type="button" id="lockBtn" class="btn-danger-ghost full-w">Verrouiller</button>
+  <div id="app" class="layout" hidden>
+    <aside class="sidebar" aria-label="Organisation">
+      <a class="brand" href="#vue">
+        <img src="/images/logo.webp" alt="" width="42" height="42">
+        <div><strong>UATM GASA</strong><span>Vie étudiante</span></div>
+      </a>
+      <nav class="section-nav" aria-label="Tableau de bord">
+        <p class="sidebar-caption">Organisation</p>
+        <a href="#vue" data-view="vue"><svg class="icon"><use href="#i-grid"/></svg><span>Vue d’ensemble</span></a>
+        <a href="#sondages" data-view="sondages"><svg class="icon"><use href="#i-chart"/></svg><span>Sondages</span></a>
+        <a href="#activites" data-view="activites"><svg class="icon"><use href="#i-calendar"/></svg><span>Activités</span></a>
+        <a href="#avis" data-view="avis"><svg class="icon"><use href="#i-comment"/></svg><span>Avis</span></a>
+        <a href="#annonce" data-view="annonce"><svg class="icon"><use href="#i-broadcast"/></svg><span>Annonces</span></a>
+        <a href="#partage" data-view="partage"><svg class="icon"><use href="#i-share"/></svg><span id="share-nav-label">Partage et exports</span></a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="/mainpage.html" target="_blank" rel="noopener"><svg class="icon"><use href="#i-external"/></svg><span>Voir le site étudiant</span></a>
+        <button id="logout" type="button"><svg class="icon"><use href="#i-logout"/></svg><span>Se déconnecter</span></button>
       </div>
     </aside>
 
-    <!-- CONTENU PRINCIPAL -->
-    <main class="main-content">
-      
-      <!-- EN-TÊTE -->
-      <header class="topbar">
-        <div>
-          <span class="kicker">TABLEAU DE BORD • COTONOU</span>
-          <h1>Pilotage Vie Étudiante</h1>
+    <main id="dashboard" class="main" tabindex="-1">
+      <header class="topline">
+        <div class="topline-location">
+          <div class="breadcrumb">Organisation <span aria-hidden="true">/</span> <strong id="current-page">Vue d’ensemble</strong></div>
+          <p class="committee-identity" id="committee-identity" hidden><span id="committee-user"></span> <strong id="committee-role"></strong></p>
         </div>
-        <div class="topbar-actions">
-          <button type="button" id="copyWhatsappReport" class="btn-primary">Copier bilan WhatsApp</button>
-          <button type="button" id="resetVotesBtn" class="btn-outline">Réinitialiser votes</button>
+        <div class="topline-actions">
+          <label class="theme-picker"><span>Thème</span><select data-admin-theme><option value="light">Clair</option><option value="dark">Sombre</option></select></label>
+          <button id="refresh" class="button outline icon-button" type="button" title="Actualiser les données" aria-label="Actualiser les données"><svg class="icon"><use href="#i-refresh"/></svg></button>
         </div>
       </header>
-
-      <!-- 1. INDICATEURS CLÉS (KPIs) -->
-      <section id="section-kpis" class="kpi-grid">
-        <div class="kpi-card">
-          <span class="kpi-label">Activité en tête</span>
-          <strong class="kpi-value accent" id="kpiTopActivity">Cinéma Éducatif</strong>
-          <small class="kpi-sub" id="kpiTopActivityPct">42% des intentions</small>
+      <div class="workspace">
+        <div class="page-head">
+          <div><h1 id="page-title">Vue d’ensemble</h1><p id="page-intro">Pilotez les séances et retrouvez les réponses des étudiants.</p></div>
+          <button id="new-button" type="button" class="button primary"><svg class="icon"><use href="#i-plus"/></svg><span id="new-button-label">Nouveau sondage</span></button>
         </div>
-
-        <div class="kpi-card">
-          <span class="kpi-label">Total votes activités</span>
-          <strong class="kpi-value" id="kpiTotalActVotes">100</strong>
-          <small class="kpi-sub">Cumul sur 4 propositions</small>
+        <div id="session-bar" class="session-bar">
+          <label for="session-select"><svg class="icon"><use href="#i-calendar"/></svg> Séance</label>
+          <select id="session-select"></select>
         </div>
-
-        <div class="kpi-card">
-          <span class="kpi-label">Votes thématiques</span>
-          <strong class="kpi-value" id="kpiTotalThemeVotes">700</strong>
-          <small class="kpi-sub">Sur les 7 activités du campus</small>
-        </div>
-
-        <div class="kpi-card">
-          <span class="kpi-label">Avis Édition #1</span>
-          <strong class="kpi-value" id="kpiCommentsCount">3</strong>
-          <small class="kpi-sub">Retours étudiants publiés</small>
-        </div>
-      </section>
-
-      <!-- 2. RÉSULTATS DES SONDAGES -->
-      <section id="section-sondages" class="dashboard-grid-2">
-        
-        <!-- Colonne 1 : Priorité des prochaines activités -->
-        <div class="panel-card">
-          <div class="panel-head">
-            <div>
-              <span class="kicker">SONDAGE GLOBAL</span>
-              <h3>Prochaine activité à programmer</h3>
-            </div>
-          </div>
-          <div class="bars-container" id="adminActivityBars"></div>
-        </div>
-
-        <!-- Colonne 2 : Détail par activité (Films éducatifs, Débats, Jeux...) -->
-        <div class="panel-card">
-          <div class="panel-head">
-            <div>
-              <span class="kicker">DÉTAIL THÉMATIQUE</span>
-              <h3>Choix par activité</h3>
-            </div>
-            <select id="activitySelector" class="admin-select">
-              <option value="cinema">01. Cinéma Éducatif</option>
-              <option value="conference">02. Conférence & Débat</option>
-              <option value="hackathon">03. Hackathon Campus</option>
-              <option value="atelier">04. Atelier Carrière</option>
-              <option value="esport">05. Tournoi E-Sport</option>
-              <option value="scene">06. Scène Ouverte</option>
-              <option value="sport">07. Tournoi Inter-Filières</option>
-            </select>
-          </div>
-          <div class="bars-container" id="adminThemeBars"></div>
-        </div>
-
-      </section>
-
-      <!-- 3. MODÉRATION DES COMMENTAIRES ÉDITION #1 -->
-      <section id="section-commentaires" class="panel-card">
-        <div class="panel-head">
-          <div>
-            <span class="kicker">ÉDITION #1 • RETOURS ÉTUDIANTS</span>
-            <h3>Modération des commentaires</h3>
-          </div>
-          <span class="badge-info" id="modCountBadge">3 commentaires</span>
-        </div>
-
-        <div class="table-wrapper">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>Étudiant & Filière</th>
-                <th>Commentaire publié</th>
-                <th style="text-align: right;">Action</th>
-              </tr>
-            </thead>
-            <tbody id="adminCommentsBody"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <!-- 4. PROFILS CONNECTÉS & EXPORT -->
-      <section id="section-etudiants" class="panel-card">
-        <div class="panel-head">
-          <div>
-            <span class="kicker">SESSION LOCALE & CONTACT</span>
-            <h3>Dernier profil étudiant enregistré</h3>
-          </div>
-          <a href="https://wa.me" target="_blank" class="wa-btn">Ouvrir WhatsApp (+229 69 19 72 12)</a>
-        </div>
-        <div id="studentProfileSummary" class="profile-summary-box"></div>
-      </section>
-
+        <p id="app-message" class="form-message" role="status" aria-live="polite" hidden></p>
+        <section id="content" aria-labelledby="page-title" aria-busy="true"></section>
+      </div>
     </main>
   </div>
 
-  <script src="admin.js"></script>
+  <dialog id="editor">
+    <div class="dialog-head">
+      <h2 id="editor-title"></h2>
+      <button id="editor-close" type="button" class="button icon-button outline" aria-label="Fermer"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <form id="editor-form">
+      <div id="editor-fields" class="dialog-body stack"></div>
+      <p id="editor-error" class="form-message error" role="alert" hidden></p>
+      <div class="dialog-foot">
+        <button id="editor-cancel" type="button" class="button outline">Annuler</button>
+        <button id="editor-submit" type="submit" class="button primary">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

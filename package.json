@@ -1,0 +1,25 @@
+{
+  "name": "gasa-activites",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sondages, avis et annonces de la vie étudiante UATM GASA",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "dependencies": {
+    "docx": "^9.15.4",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "qrcode": "^1.5.4",
+    "web-push": "^4.0.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  }
+}

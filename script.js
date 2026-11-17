@@ -1,457 +1,700 @@
-document.addEventListener("DOMContentLoaded", () => {
-  const header = document.getElementById("carousel");
-  const slides = document.querySelectorAll(".slide");
-  const dots = document.querySelectorAll(".dot");
-  const bgCurrent = document.getElementById("bgCurrent");
-  const bgNext = document.getElementById("bgNext");
-  const nextTrigger = document.getElementById("nextTrigger");
-  const ringFill = document.getElementById("ringFill");
+"use strict";
 
-  let currentIndex = 0;
-  let isTransitioning = false;
-  const SLIDE_DURATION = 6500;
-  let progressStart = performance.now();
+const parameters = new URLSearchParams(location.search);
+const linkedSession = parameters.get("seance");
+const views = ["vote", "avis", "annonce"];
+const linkedView = views.includes(parameters.get("vue")) ? parameters.get("vue") : null;
+const isDirectLink = Boolean(linkedSession && linkedView);
+const $ = (id) => document.getElementById(id);
 
-  if (slides.length > 0 && bgCurrent) {
-    bgCurrent.style.backgroundImage = `url('${slides.item(0).getAttribute("data-bg")}')`;
-  }
+const panels = {
+  vote: { content: $("vote-content"), status: $("vote-status") },
+  avis: { content: $("feedback-content"), status: $("feedback-status") },
+  annonce: { content: $("announcement-content"), status: $("announcement-status") },
+};
 
-  /* --- 1. COMPTE À REBOURS EN DIRECT --- */
-  const targetDate = new Date("2026-11-27T18:30:00").getTime();
-  const countdownEl = document.getElementById("countdown");
-
-  function updateCountdown() {
-    if (!countdownEl) return;
-    const diff = targetDate - Date.now();
-    if (diff <= 0) {
-      countdownEl.textContent = "• Ce soir !";
-      return;
-    }
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-    countdownEl.textContent = `• J-${String(days).padStart(2, "0")} : ${String(hours).padStart(2, "0")}H`;
-  }
-  updateCountdown();
-  setInterval(updateCountdown, 60000);
-
-  /* --- 2. DONNÉES DU SONDAGE CONTEXTUEL SELON L'ACTIVITÉ --- */
-  const activityPolls = {
-    cinema: {
-      kicker: "01 • ACTIVITÉ PROGRAMMÉE : CINÉMA",
-      title: "Quel genre éducatif pour la projection ?",
-      options: new Array(
-        { tag: "Sciences & Technologie", label: "Documentaire & Innovation", votes: 52, img: "images/cinema.jpg" },
-        { tag: "Parcours & Réussite", label: "Biopic & Entrepreneuriat", votes: 31, img: "images/im18.jpeg" },
-        { tag: "Culture & Réflexion", label: "Histoire & Enjeux de Société", votes: 17, img: "images/im19.jpeg" }
-      )
-    },
-    conference: {
-      kicker: "01 • ACTIVITÉ : CONFÉRENCE & DÉBAT",
-      title: "Quel thème souhaitez-vous aborder ?",
-      options: new Array(
-        { tag: "Numérique & Futur", label: "Intelligence Artificielle & Métiers", votes: 49, img: "images/im18.jpeg" },
-        { tag: "Économie Locale", label: "Entrepreneuriat Étudiant au Bénin", votes: 33, img: "images/im19.jpeg" },
-        { tag: "Sécurité Numérique", label: "Cybersécurité & Protection des Données", votes: 18, img: "images/innovation.png" }
-      )
-    },
-    hackathon: {
-      kicker: "01 • ACTIVITÉ : HACKATHON CAMPUS",
-      title: "Quel défi technique relever en équipe ?",
-      options: new Array(
-        { tag: "Vie Étudiante", label: "Application utile pour le campus GASA", votes: 50, img: "images/innovation.png" },
-        { tag: "FinTech", label: "Solution de paiement mobile simplifiée", votes: 29, img: "images/im5.jpeg" },
-        { tag: "Ville Durable", label: "Gestion intelligente des déchets à Cotonou", votes: 21, img: "images/im18.jpeg" }
-      )
-    },
-    atelier: {
-      kicker: "01 • ACTIVITÉ : ATELIER CARRIÈRE",
-      title: "Quel module pratique privilégier ?",
-      options: new Array(
-        { tag: "Insertion Pro", label: "CV percutant, LinkedIn & Entretien", votes: 46, img: "images/im19.jpeg" },
-        { tag: "Communication", label: "Prise de parole en public & Pitch", votes: 34, img: "images/scene.jpg" },
-        { tag: "Organisation", label: "Gestion de projet Agile en équipe", votes: 20, img: "images/innovation.png" }
-      )
-    },
-    esport: {
-      kicker: "01 • ACTIVITÉ : TOURNOI E-SPORT",
-      title: "Sur quel jeu organiser la compétition ?",
-      options: new Array(
-        { tag: "Football", label: "EA Sports FC (FIFA) 1v1", votes: 56, img: "images/cinema.jpg" },
-        { tag: "Combat", label: "Tekken 8 / Mortal Kombat", votes: 25, img: "images/im4.jpeg" },
-        { tag: "Course", label: "Blur / Mario Kart en réseau", votes: 19, img: "images/im6.jpeg" }
-      )
-    },
-    scene: {
-      kicker: "01 • ACTIVITÉ : SCÈNE OUVERTE",
-      title: "Quel format artistique mettre en avant ?",
-      options: new Array(
-        { tag: "Musique & Voix", label: "Chant Acoustique, Rap & Slam", votes: 47, img: "images/scene.jpg" },
-        { tag: "Humour & Théâtre", label: "Stand-up & Improvisation", votes: 33, img: "images/im1.jpeg" },
-        { tag: "Danse", label: "Chorégraphies & Battles", votes: 20, img: "images/im2.jpeg" }
-      )
-    },
-    sport: {
-      kicker: "01 • ACTIVITÉ : TOURNOI INTER-FILIÈRES",
-      title: "Quelle discipline sportive lancer ?",
-      options: new Array(
-        { tag: "Collectif", label: "Tournoi de Football Petit Camp", votes: 55, img: "images/im4.jpeg" },
-        { tag: "Intensité", label: "Basketball 3x3 sur le campus", votes: 28, img: "images/im3.jpeg" },
-        { tag: "Endurance", label: "Volleyball Mixte Inter-Promotions", votes: 17, img: "images/im5.jpeg" }
-      )
-    }
-  };
-
-  let currentActivityKey = "cinema";
-  let storedContextVotes = JSON.parse(localStorage.getItem("gasa_context_votes")) || {};
-  let userContextChoices = JSON.parse(localStorage.getItem("gasa_user_context_choices")) || {};
-
-  const dynamicKicker = document.getElementById("dynamicPollKicker");
-  const dynamicTitle = document.getElementById("dynamicPollTitle");
-  const cinemaRows = document.querySelectorAll(".cinema-row");
-
-  function renderContextualPoll(key) {
-    currentActivityKey = activityPolls[key] ? key : "cinema";
-    const config = activityPolls[currentActivityKey];
-
-    if (dynamicKicker) dynamicKicker.textContent = config.kicker;
-    if (dynamicTitle) dynamicTitle.textContent = config.title;
-
-    if (!storedContextVotes[currentActivityKey]) {
-      storedContextVotes[currentActivityKey] = config.options.map((o) => o.votes);
-    }
-
-    const votesArr = storedContextVotes[currentActivityKey];
-    const total = votesArr.reduce((a, b) => a + b, 0);
-    const chosenIdx = userContextChoices[currentActivityKey];
-
-    cinemaRows.forEach((row, i) => {
-      const opt = config.options.at(i);
-      if (!opt) return;
-
-      const pct = Math.round((votesArr.at(i) / total) * 100);
-      const imgEl = row.querySelector("img");
-      const tagEl = document.getElementById(`optTag${i}`);
-      const titleEl = document.getElementById(`optTitle${i}`);
-      const scoreEl = document.getElementById(`optScore${i}`);
-      const barEl = document.getElementById(`optBar${i}`);
-
-      if (imgEl && opt.img) imgEl.src = opt.img;
-      if (tagEl) tagEl.textContent = opt.tag;
-      if (titleEl) titleEl.textContent = opt.label;
-      if (scoreEl) scoreEl.textContent = `${pct}%`;
-      if (barEl) barEl.style.width = `${pct}%`;
-
-      row.classList.toggle("selected", chosenIdx !== undefined && chosenIdx === i);
-    });
-  }
-
-  renderContextualPoll("cinema");
-
-  cinemaRows.forEach((row) => {
-    row.addEventListener("click", () => {
-      if (userContextChoices[currentActivityKey] !== undefined) return;
-      const idx = parseInt(row.getAttribute("data-opt"), 10);
-      const votesArr = storedContextVotes[currentActivityKey];
-      votesArr.splice(idx, 1, votesArr.at(idx) + 1);
-      userContextChoices[currentActivityKey] = idx;
-      localStorage.setItem("gasa_context_votes", JSON.stringify(storedContextVotes));
-      localStorage.setItem("gasa_user_context_choices", JSON.stringify(userContextChoices));
-      renderContextualPoll(currentActivityKey);
-    });
-  });
-  /* --- 3. CARROUSEL, RIDEAU & SYNCHRONISATION --- */
-  function goToSlide(targetIndex) {
-    if (isTransitioning || targetIndex === currentIndex) return;
-    isTransitioning = true;
-
-    const targetSlide = slides.item(targetIndex);
-    const nextBgUrl = targetSlide.getAttribute("data-bg");
-    const actKey = targetSlide.getAttribute("data-activity-key");
-
-    bgNext.style.backgroundImage = `url('${nextBgUrl}')`;
-    bgNext.classList.add("revealing");
-
-    slides.item(currentIndex).classList.remove("active");
-    targetSlide.classList.add("active");
-    dots.forEach((d, i) => d.classList.toggle("active", i === targetIndex));
-
-    if (actKey) renderContextualPoll(actKey);
-
-    setTimeout(() => {
-      bgCurrent.style.backgroundImage = `url('${nextBgUrl}')`;
-      bgNext.classList.remove("revealing");
-      currentIndex = targetIndex;
-      isTransitioning = false;
-      progressStart = performance.now();
-    }, 900);
-  }
-
-  function nextSlide() {
-    goToSlide((currentIndex + 1) % slides.length);
-  }
-
-  function prevSlide() {
-    goToSlide((currentIndex - 1 + slides.length) % slides.length);
-  }
-
-  if (nextTrigger) {
-    nextTrigger.addEventListener("click", () => {
-      nextSlide();
-      progressStart = performance.now();
-    });
-  }
-
-  dots.forEach((dot) => {
-    dot.addEventListener("click", () => {
-      goToSlide(parseInt(dot.getAttribute("data-index"), 10));
-      progressStart = performance.now();
-    });
-  });
-
-  document.querySelectorAll(".select-activity-trigger").forEach((link) => {
-    link.addEventListener("click", () => {
-      const actKey = link.getAttribute("data-activity-key");
-      if (actKey) renderContextualPoll(actKey);
-    });
-  });
-
-  let touchStartX = 0;
-  if (header) {
-    header.addEventListener("touchstart", (e) => {
-      touchStartX = e.changedTouches.item(0).screenX;
-    }, { passive: true });
-
-    header.addEventListener("touchend", (e) => {
-      const touchEndX = e.changedTouches.item(0).screenX;
-      if (touchStartX - touchEndX > 50) { nextSlide(); progressStart = performance.now(); }
-      if (touchEndX - touchStartX > 50) { prevSlide(); progressStart = performance.now(); }
-    }, { passive: true });
-  }
-
-  const CIRCUMFERENCE = 176;
-  function updateRing(now) {
-    if (!isTransitioning && ringFill) {
-      const elapsed = now - progressStart;
-      const ratio = Math.min(elapsed / SLIDE_DURATION, 1);
-      ringFill.style.strokeDashoffset = CIRCUMFERENCE * (1 - ratio);
-      if (ratio >= 1) nextSlide();
-    }
-    requestAnimationFrame(updateRing);
-  }
-  requestAnimationFrame(updateRing);
-
-  /* --- 4. PARALLAXE SPATIALE --- */
-  let targetX = 0, targetY = 0, currentX = 0, currentY = 0;
-
-  if (header) {
-    header.addEventListener("mousemove", (e) => {
-      const rect = header.getBoundingClientRect();
-      targetX = (e.clientX - rect.left) / rect.width - 0.5;
-      targetY = (e.clientY - rect.top) / rect.height - 0.5;
-    });
-
-    header.addEventListener("mouseleave", () => {
-      targetX = 0;
-      targetY = 0;
-    });
-  }
-
-  function animateParallax() {
-    currentX += (targetX - currentX) * 0.07;
-    currentY += (targetY - currentY) * 0.07;
-
-    const bgTransform = `translate3d(${-currentX * 35}px, ${-currentY * 35}px, 0) scale(1.08)`;
-    if (bgCurrent) bgCurrent.style.transform = bgTransform;
-    if (bgNext) bgNext.style.transform = bgTransform;
-
-    const activeContent = document.querySelector(".slide.active .slide-content");
-    if (activeContent) {
-      activeContent.style.transform = `translate3d(${currentX * 25}px, ${currentY * 25}px, 0) rotateX(${-currentY * 6}deg) rotateY(${currentX * 6}deg)`;
-    }
-    requestAnimationFrame(animateParallax);
-  }
-  animateParallax();
-
-  /* --- 5. SONDAGE DE DROITE (ACTIVITÉS À PROGRAMMER) --- */
-  const pollItems = document.querySelectorAll(".studio-option");
-  let activityVotes = JSON.parse(localStorage.getItem("gasa_act_votes")) || new Array(42, 24, 19, 15);
-  let votedActivity = localStorage.getItem("gasa_voted_act");
-
-  function renderPoll() {
-    const total = activityVotes.reduce((a, b) => a + b, 0);
-    pollItems.forEach((btn, i) => {
-      const pct = Math.round((activityVotes.at(i) / total) * 100);
-      btn.querySelector(".studio-fill").style.width = `${pct}%`;
-      btn.querySelector(".poll-percent").textContent = `${pct}%`;
-      if (votedActivity !== null && parseInt(votedActivity, 10) === i) {
-        btn.classList.add("voted");
-      } else if (votedActivity !== null) {
-        btn.classList.remove("voted");
-      }
-    });
-  }
-  renderPoll();
-
-  pollItems.forEach((item) => {
-    item.addEventListener("click", () => {
-      const actKey = item.getAttribute("data-activity-key");
-      if (actKey) renderContextualPoll(actKey);
-
-      if (votedActivity !== null) return;
-      const idx = parseInt(item.getAttribute("data-option"), 10);
-      activityVotes.splice(idx, 1, activityVotes.at(idx) + 1);
-      votedActivity = idx;
-      localStorage.setItem("gasa_act_votes", JSON.stringify(activityVotes));
-      localStorage.setItem("gasa_voted_act", idx);
-      renderPoll();
-    });
-  });
-  /* --- 6. MODALE PROFIL / CONNEXION ÉTUDIANT --- */
-  const authBtn = document.getElementById("authBtn");
-  const authBtnLabel = document.getElementById("authBtnLabel");
-  const authModalBackdrop = document.getElementById("authModalBackdrop");
-  const closeAuthBtn = document.getElementById("closeAuthBtn");
-  const loginForm = document.getElementById("loginForm");
-  const loginName = document.getElementById("loginName");
-  const loginDob = document.getElementById("loginDob");
-  const loginNiveau = document.getElementById("loginNiveau");
-  const loginFiliere = document.getElementById("loginFiliere");
-  const profileView = document.getElementById("profileView");
-  const profileInitials = document.getElementById("profileInitials");
-  const profileDisplayName = document.getElementById("profileDisplayName");
-  const profileDisplayFiliere = document.getElementById("profileDisplayFiliere");
-  const profileDisplayDob = document.getElementById("profileDisplayDob");
-  const logoutBtn = document.getElementById("logoutBtn");
-  const commentAuthorInput = document.getElementById("commentAuthorInput");
-
-  let currentUser = JSON.parse(localStorage.getItem("gasa_user")) || null;
-
-  function formatDateFr(isoDate) {
-    if (!isoDate) return "";
-    const parts = isoDate.split("-");
-    if (parts.length !== 3) return isoDate;
-    return `${parts.at(2)}/${parts.at(1)}/${parts.at(0)}`;
-  }
-
-  function updateAuthUI() {
-    if (currentUser) {
-      const firstName = currentUser.name.split(" ").at(0);
-      const initials = currentUser.name
-        .split(" ")
-        .map((part) => part.charAt(0))
-        .join("")
-        .substring(0, 2)
-        .toUpperCase();
-
-      authBtn.classList.add("connected");
-      authBtnLabel.textContent = `${firstName} (${currentUser.niveau} ${currentUser.filiere})`;
-      loginForm.style.display = "none";
-      profileView.style.display = "block";
-      profileInitials.textContent = initials || "ET";
-      profileDisplayName.textContent = currentUser.name;
-      profileDisplayFiliere.textContent = `${currentUser.niveau} • ${currentUser.filiere}`;
-      if (profileDisplayDob) {
-        profileDisplayDob.textContent = `Né(e) le ${formatDateFr(currentUser.dob)}`;
-      }
-      if (commentAuthorInput) {
-        commentAuthorInput.value = `${currentUser.name} • ${currentUser.niveau} ${currentUser.filiere}`;
-      }
-    } else {
-      authBtn.classList.remove("connected");
-      authBtnLabel.textContent = "Se connecter";
-      loginForm.style.display = "flex";
-      profileView.style.display = "none";
-    }
-  }
-  updateAuthUI();
-
-  function openAuthModal() {
-    authModalBackdrop.classList.add("open");
-  }
-
-  function closeAuthModal() {
-    authModalBackdrop.classList.remove("open");
-  }
-
-  if (authBtn) authBtn.addEventListener("click", openAuthModal);
-  if (closeAuthBtn) closeAuthBtn.addEventListener("click", closeAuthModal);
-  if (authModalBackdrop) {
-    authModalBackdrop.addEventListener("click", (e) => {
-      if (e.target === authModalBackdrop) closeAuthModal();
-    });
-  }
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") closeAuthModal();
-  });
-
-  if (loginForm) {
-    loginForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      currentUser = {
-        name: loginName.value.trim(),
-        dob: loginDob.value,
-        niveau: loginNiveau.value,
-        filiere: loginFiliere.value
-      };
-      localStorage.setItem("gasa_user", JSON.stringify(currentUser));
-      updateAuthUI();
-      closeAuthModal();
-    });
-  }
-
-  if (logoutBtn) {
-    logoutBtn.addEventListener("click", () => {
-      currentUser = null;
-      localStorage.removeItem("gasa_user");
-      updateAuthUI();
-      closeAuthModal();
-    });
-  }
-
-  /* --- 7. SECTION COMMENTAIRES ÉDITORIALE (SÉANCE PASSÉE) --- */
-  const commentForm = document.getElementById("commentForm");
-  const commentTextInput = document.getElementById("commentTextInput");
-  const commentsGrid = document.getElementById("commentsGrid");
-  const commentsCounter = document.getElementById("commentsCounter");
-
-  const defaultComments = new Array(
-    { author: "Marc • L2 SIL", text: "La première projection était incroyable, super ambiance sur le campus le soir !" },
-    { author: "Aïcha • L3 RIT", text: "Merci pour l'organisation, on veut des séances cinéma éducatif encore plus souvent." },
-    { author: "Jean-Luc • L1 SI", text: "Le débat après le film était très enrichissant, vivement l'édition #2." }
-  );
-
-  let pastComments = JSON.parse(localStorage.getItem("gasa_past_comments")) || defaultComments;
-
-  function renderComments() {
-    if (!commentsGrid) return;
-    commentsGrid.innerHTML = "";
-    pastComments.forEach((c) => {
-      const card = document.createElement("div");
-      card.className = "comment-card";
-      card.innerHTML = `
-        <p>« ${c.text} »</p>
-        <span class="comment-author">— ${c.author}</span>
-      `;
-      commentsGrid.appendChild(card);
-    });
-    if (commentsCounter) {
-      commentsCounter.textContent = `${pastComments.length} avis`;
-    }
-  }
-  renderComments();
-
-  if (commentForm) {
-    commentForm.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const text = commentTextInput.value.trim();
-      const fallbackAuthor = currentUser ? `${currentUser.name} • ${currentUser.niveau} ${currentUser.filiere}` : "Étudiant UATM GASA";
-      const author = (commentAuthorInput && commentAuthorInput.value.trim()) ? commentAuthorInput.value.trim() : fallbackAuthor;
-      if (!text) return;
-
-      pastComments.unshift({ author, text });
-      localStorage.setItem("gasa_past_comments", JSON.stringify(pastComments));
-      renderComments();
-      commentTextInput.value = "";
-    });
-  }
+const dateFormat = new Intl.DateTimeFormat("fr-FR", {
+  dateStyle: "long",
+  timeStyle: "short",
+  timeZone: "Africa/Porto-Novo",
 });
+
+let home = null;
+let revealTimer;
+let homeRequest = 0;
+
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+function element(tag, properties = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(properties)) {
+    if (value === null || value === undefined || value === false) continue;
+    if (name === "class") node.className = value;
+    else node.setAttribute(name, value === true ? "" : value);
+  }
+  node.append(...children.flat().filter((child) => child !== null && child !== undefined));
+  return node;
+}
+
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS(svg.namespaceURI, "use");
+  use.setAttribute("href", "#i-" + name);
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("aria-hidden", "true");
+  svg.append(use);
+  return svg;
+}
+
+async function api(path, payload) {
+  const options = payload === undefined
+    ? { cache: "no-store" }
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) };
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data) {
+    const error = new Error(data?.error || "La connexion au site a échoué. Veuillez réessayer.");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+function status(view, label, mode = "") {
+  const badge = panels[view].status;
+  badge.hidden = !label;
+  badge.textContent = label || "";
+  badge.className = "status-tag " + (mode ? "status-" + mode : "");
+}
+
+function replace(view, ...children) {
+  const content = panels[view].content;
+  content.replaceChildren(...children);
+  content.setAttribute("aria-busy", "false");
+}
+
+function notice(title, detail, symbol) {
+  return element("div", {
+    class: "notice" + (symbol === "check" ? " notice-success" : ""),
+    tabindex: "-1",
+  }, symbol ? element("span", { class: "notice-icon" }, icon(symbol)) : null,
+  element("div", {}, element("strong", {}, title), element("p", {}, detail)));
+}
+
+
+function errorMessage() {
+  return element("p", { class: "form-error", role: "alert", hidden: true });
+}
+
+async function submit(button, error, send, onSuccess) {
+  if (button.disabled) return;
+  const label = [...button.childNodes];
+  error.hidden = true;
+  button.disabled = true;
+
+  try {
+    if (!await window.gasaStudent.authorize()) return;
+    button.textContent = "Envoi en cours…";
+    await send();
+    onSuccess();
+  } catch (failure) {
+    if (failure.status === 401) window.gasaStudent.invalidate();
+    if (failure.status === 409 && /déjà/.test(failure.message)) { loadHome(); return; }
+    error.textContent = failure instanceof TypeError
+      ? "Impossible de joindre le site. Votre réponse est toujours dans le formulaire."
+      : failure.message;
+    error.hidden = false;
+  } finally {
+    button.disabled = false;
+    button.replaceChildren(...label);
+  }
+}
+
+function image(source, props = {}) {
+  return source ? element("img", { src: source, alt: "", loading: "lazy", decoding: "async", ...props }) : null;
+}
+
+function radioChoice(group, value, label) {
+  return element("label", { class: "radio-choice" },
+    element("input", { type: "radio", name: group, value, required: true }),
+    element("span", {}, label));
+}
+
+function renderVote() {
+  const poll = home.poll;
+  status("vote", "");
+  $("vote-intro").textContent = poll
+    ? [poll.title, poll.description].filter(Boolean).join(" · ")
+    : "Choisissez une activité pour découvrir sa question.";
+
+  if (!poll) {
+    replace("vote", notice("Aucun sondage à afficher", "Le prochain sondage sera disponible ici dès sa publication."));
+    return;
+  }
+  if (poll.responded) {
+    const confirmation = element("div", { class: "response-confirmation", tabindex: "-1", role: "status" },
+      element("p", {}, "Votre participation a été prise en compte."),
+      element("span", {}, "Le comité annoncera prochainement l’activité retenue."));
+    replace("vote", confirmation);
+    return confirmation;
+  }
+  if (!poll.open) {
+    replace("vote", notice("Les votes sont terminés", "L’activité retenue sera affichée dans « Prochaine séance »."));
+    return;
+  }
+  if (!poll.activities.length) {
+    replace("vote", notice("Aucune activité disponible", "Revenez ici pour découvrir les choix du prochain sondage."));
+    return;
+  }
+
+  const grid = element("div", { class: "poll-card-grid" });
+  const finePointer = window.matchMedia("(hover: hover) and (pointer: fine)");
+  const entries = new Map();
+  let active = null;
+  let activeIsPreview = false;
+
+  function cancelHover() {
+    for (const entry of entries.values()) {
+      window.clearTimeout(entry.hoverTimer);
+      entry.hoverTimer = 0;
+    }
+  }
+
+  function showActivity(entry, preview = false) {
+    cancelHover();
+    active = entry;
+    activeIsPreview = Boolean(entry && preview);
+    for (const item of entries.values()) {
+      const selected = item === active;
+      item.form.hidden = !selected;
+      item.button.setAttribute("aria-expanded", String(selected));
+      item.card.classList.toggle("is-expanded", selected);
+    }
+    return entry?.button || null;
+  }
+
+  function draftInProgress() {
+    return active && (active.form.contains(document.activeElement) || active.form.querySelector("input:checked"));
+  }
+
+  for (const [index, activity] of poll.activities.entries()) {
+    const questionId = "poll-question-" + index;
+    const titleId = "poll-activity-title-" + index;
+    const title = element("span", { class: "poll-card-name", id: titleId }, activity.name);
+    const button = element("button", {
+      class: "poll-card-trigger",
+      type: "button",
+      "aria-expanded": "false",
+      "aria-controls": questionId,
+      "aria-labelledby": titleId,
+    },
+    element("span", { class: "poll-card-photo" }, image(activity.image)),
+    element("span", { class: "poll-card-copy" },
+      title,
+      activity.description ? element("span", { class: "poll-card-description" }, activity.description) : null));
+    const error = errorMessage();
+    const confirm = element("button", { type: "submit", class: "button button-dark poll-card-submit" }, "Confirmer mon choix");
+    const form = element("form", { class: "poll-card-survey", id: questionId, hidden: true },
+      element("fieldset", {},
+        element("legend", {}, activity.question),
+        element("div", { class: "poll-card-options" }, activity.options.map((option) =>
+          radioChoice(questionId, option.id, option.label)))),
+      error,
+      confirm);
+    const card = element("article", { class: "poll-card", "aria-labelledby": titleId }, button, form);
+    const entry = { activity, card, button, form, hoverTimer: 0 };
+    entries.set(activity.id, entry);
+
+    button.addEventListener("click", () => {
+      if (button.disabled) return;
+      showActivity(active === entry && !activeIsPreview ? null : entry);
+    });
+    card.addEventListener("pointerenter", (event) => {
+      if (event.pointerType !== "mouse" || !finePointer.matches || active === entry || draftInProgress()) return;
+      cancelHover();
+      entry.hoverTimer = window.setTimeout(() => {
+        entry.hoverTimer = 0;
+        if (card.isConnected && !button.disabled && !draftInProgress()) showActivity(entry, true);
+      }, 180);
+    });
+    card.addEventListener("pointerleave", () => {
+      window.clearTimeout(entry.hoverTimer);
+      entry.hoverTimer = 0;
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const optionId = new FormData(form).get(questionId);
+      if (!optionId) return;
+      cancelHover();
+      entries.forEach((item) => { item.button.disabled = true; });
+      submit(confirm, error, () => api("/api/sessions/" + encodeURIComponent(poll.id) + "/vote", {
+        activityId: activity.id, optionId,
+      }), () => {
+        poll.responded = true;
+        renderVote()?.focus();
+        renderCampusCover();
+      }).finally(() => entries.forEach((item) => { item.button.disabled = false; }));
+    });
+    grid.append(card);
+  }
+
+  replace("vote", grid);
+}
+
+function renderFeedback() {
+  const feedback = home.feedback;
+  status("avis", "");
+  $("feedback-intro").textContent = feedback
+    ? feedback.title + " · Votre retour est partagé avec le comité."
+    : "Partagez vos impressions sur la dernière séance.";
+
+  if (!feedback) {
+    replace("avis", notice("Aucune séance à évaluer", "Le formulaire sera disponible après une séance."));
+    return;
+  }
+  if (feedback.responded) {
+    const confirmation = element("div", { class: "response-confirmation", tabindex: "-1" },
+      element("h3", {}, "Votre avis a été transmis"),
+      element("p", {}, "Le comité le retrouvera dans le bilan de cette séance."));
+    replace("avis", confirmation);
+    return confirmation;
+  }
+  if (!feedback.open) {
+    replace("avis", notice("La collecte est terminée", "Le comité a clôturé les avis pour cette séance."));
+    return;
+  }
+
+  const levels = ["Très décevante", "Décevante", "Correcte", "Réussie", "Excellente"];
+  const error = errorMessage();
+  const send = element("button", { type: "submit", class: "button button-dark" }, "Envoyer mon avis");
+  const selection = element("div", { class: "experience-options" }, levels.map((label, index) =>
+    element("label", { class: "experience-option" },
+      element("input", { type: "radio", name: "rating", value: index + 1, required: true }),
+      element("span", { class: "experience-radio", "aria-hidden": "true" }),
+      element("span", {}, label))));
+  const details = element("div", { class: "feedback-detail", id: "feedback-detail", hidden: true },
+    element("label", { for: "feedback-comment" }, "Qu’aimeriez-vous partager avec le comité ?",
+      element("span", { class: "optional-label" }, "Facultatif")),
+    element("textarea", {
+      name: "comment", id: "feedback-comment", rows: "3", maxlength: "1000",
+      placeholder: "Un moment apprécié, une idée ou un point à améliorer…",
+    }),
+    element("div", { class: "feedback-actions" },
+      element("p", {}, "Votre nom n’apparaît pas dans le bilan des avis."),
+      send));
+  selection.addEventListener("change", () => {
+    details.hidden = false;
+    selection.closest("form").classList.add("has-rating");
+  });
+
+  const form = element("form", { class: "experience-form" },
+    element("fieldset", {},
+      element("legend", {}, "Comment s’est passée la séance ?"),
+      selection),
+    details,
+    error);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const values = new FormData(form);
+    submit(send, error, () => api("/api/sessions/" + encodeURIComponent(feedback.id) + "/feedback", {
+      rating: Number(values.get("rating")), comment: String(values.get("comment")).trim(),
+    }), () => {
+      feedback.responded = true;
+      renderFeedback()?.focus();
+      renderCampusCover();
+    });
+  });
+  replace("avis", form);
+}
+
+
+function dateLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : dateFormat.format(date);
+}
+
+function eventDetails(announcement) {
+  const date = dateLabel(announcement.date);
+  return element("ul", { class: "event-details" },
+    date ? element("li", {}, icon("calendar"), element("time", { datetime: announcement.date }, date)) : null,
+    announcement.location ? element("li", {}, icon("pin"), announcement.location) : null);
+}
+
+function renderAnnouncement() {
+  const announcement = home.announcement;
+  $("announcement-intro").textContent = announcement?.title || "Retrouvez ici l’activité retenue par le comité.";
+  if (!announcement) {
+    status("annonce", "");
+    replace("annonce", notice("Annonce à venir", "L’activité et la date s’afficheront ici dès publication.", "calendar"));
+    return;
+  }
+
+  if (announcement.revealed && announcement.activity) {
+    status("annonce", "Séance confirmée", "success");
+    const activity = announcement.activity;
+    replace("annonce", element("article", { class: "event-card" },
+      element("div", { class: "event-copy" },
+        element("h3", {}, activity.name),
+        eventDetails(announcement),
+        activity.description ? element("p", {}, activity.description) : null),
+      element("div", { class: "event-photo" }, image(activity.image) || icon("calendar"))));
+    return;
+  }
+
+  status("annonce", "Mode surprise", "live");
+  const reveal = dateLabel(announcement.revealAt);
+  const guess = announcement.responded
+    ? notice("Proposition enregistrée", "Revenez au moment de la révélation pour découvrir l’activité.", "check")
+    : null;
+  let form = null;
+
+  if (!guess && announcement.choices.length) {
+    const error = errorMessage();
+    const send = element("button", { class: "button button-dark", type: "submit" }, "Envoyer ma proposition");
+    form = element("form", { class: "guess-form" },
+      element("fieldset", {},
+        element("legend", {}, "Quelle activité se cache derrière cet indice ?"),
+        element("div", { class: "radio-list guess-options" },
+          announcement.choices.map((choice) => radioChoice("guess", choice.id, choice.name)))),
+      error,
+      send);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const activityId = new FormData(form).get("guess");
+      submit(send, error, () => api("/api/sessions/" + encodeURIComponent(announcement.id) + "/guess", { activityId }), () => {
+        announcement.responded = true;
+        renderAnnouncement()?.focus();
+      });
+    });
+  }
+
+  replace("annonce", element("div", { class: "mystery-panel" },
+    element("div", { class: "event-card" },
+      element("div", { class: "event-copy" },
+        element("h3", {}, "Devinez l’activité"),
+        eventDetails(announcement),
+        announcement.hint ? element("p", { class: "event-hint" },
+          element("strong", {}, "L’indice"), announcement.hint) : null,
+        reveal ? element("p", { class: "reveal-date" },
+          "Révélation le ", element("time", { datetime: announcement.revealAt }, reveal)) : null),
+      element("div", { class: "event-photo mystery-art", "aria-hidden": "true" })),
+    guess || form));
+  return guess;
+}
+
+
+function renderCampusCover() {
+  if (isDirectLink) return;
+  const { poll, announcement, feedback } = home;
+  const voteOpen = poll?.open && !poll.responded;
+  const needsFeedback = feedback?.open && !feedback.responded;
+  const action = $("campus-cover-cta");
+  action.href = voteOpen ? "#vote" : announcement ? "#annonce" : needsFeedback ? "#avis" : "#vote";
+  action.textContent = voteOpen ? "Voter pour une activité"
+    : announcement ? (announcement.revealed ? "Voir la prochaine séance" : "Deviner l’activité")
+    : needsFeedback ? "Donner mon avis" : "Voir le sondage";
+}
+
+
+function activeNavigation() {
+  const section = isDirectLink ? linkedView : location.hash.slice(1);
+  const active = views.includes(section) ? section : "vote";
+  document.querySelectorAll("[data-nav]").forEach((link) => {
+    if (link.dataset.nav === active) link.setAttribute("aria-current", "location");
+    else link.removeAttribute("aria-current");
+  });
+}
+
+const apiHome = "/api/home" + (linkedSession ? "?session=" + encodeURIComponent(linkedSession) : "");
+
+function scheduleReveal() {
+  window.clearTimeout(revealTimer);
+  const liveAnnouncement = home?.announcement;
+  if (!liveAnnouncement?.revealAt || liveAnnouncement.revealed) return;
+  const time = new Date(liveAnnouncement.revealAt).getTime();
+  if (!Number.isFinite(time)) return;
+
+  revealTimer = window.setTimeout(async () => {
+    try {
+      const updated = await api(apiHome);
+      home.announcement = updated.announcement;
+      if (updated.announcement?.revealed) {
+        renderAnnouncement();
+        renderCampusCover();
+      }
+    } catch {
+      // Le prochain rafraîchissement réessaiera si la connexion est coupée.
+    }
+    scheduleReveal();
+  }, Math.min(Math.max(8000, time - Date.now() + 500), 2147483647));
+}
+
+async function loadHome() {
+  const request = ++homeRequest;
+  $("load-error").hidden = true;
+  for (const { content } of Object.values(panels)) content.setAttribute("aria-busy", "true");
+  try {
+    const updated = await api(apiHome);
+    if (request !== homeRequest) return;
+    home = updated;
+    if (!isDirectLink || linkedView === "vote") renderVote();
+    if (!isDirectLink || linkedView === "avis") renderFeedback();
+    if (!isDirectLink || linkedView === "annonce") renderAnnouncement();
+    renderCampusCover();
+    scheduleReveal();
+  } catch {
+    if (request !== homeRequest) return;
+    $("load-error-text").textContent = location.protocol === "file:"
+      ? "Ouvrez cette page à partir du serveur du projet pour charger les séances."
+      : "Les séances n’ont pas pu être chargées. Veuillez réessayer.";
+    $("load-error").hidden = false;
+    for (const view of views) replace(view);
+  }
+}
+
+if (isDirectLink) {
+  $("accueil-classique").hidden = true;
+  $("galerie").hidden = true;
+  $("edition").hidden = linkedView !== "avis";
+  document.body.classList.add("is-direct");
+  for (const view of views) $(view).hidden = view !== linkedView;
+  const sectionHeading = $(linkedView).querySelector("h2");
+  sectionHeading.replaceWith(element("h1", {
+    id: sectionHeading.id,
+    tabindex: "-1",
+  }, sectionHeading.textContent));
+  document.querySelectorAll("[data-nav]").forEach((link) => {
+    const ownView = link.dataset.nav;
+    link.href = ownView === linkedView ? "#" + linkedView : "/#" + link.dataset.nav;
+  });
+} else {
+  const previousAnchors = { "#espace-vote": "#vote", "#edition-passee": "#galerie", "#carousel": "#accueil" };
+  const hash = previousAnchors[location.hash] || location.hash;
+  const target = hash === "#accueil" ? "#accueil-classique" : hash;
+  if (target !== location.hash) location.replace(target);
+}
+
+$("retry-load").addEventListener("click", loadHome);
+window.addEventListener("hashchange", activeNavigation);
+window.addEventListener("gasa:account-change", loadHome);
+activeNavigation();
+loadHome();
+
+
+function setupParallax(hero) {
+  if (hero.hidden) return;
+
+  const finePointer = window.matchMedia("(any-hover: hover) and (any-pointer: fine)");
+  const neutral = { x: 0, y: 0, scroll: 0 };
+  const current = { ...neutral };
+  const properties = ["--image-x", "--image-y", "--atmosphere-x", "--atmosphere-y", "--copy-x", "--copy-y"];
+  let visible = false;
+  let point = null;
+  let frame = 0;
+  const canMove = () => visible && finePointer.matches && !reducedMotion.matches;
+
+  function requestFrame() {
+    if (!frame && canMove()) frame = requestAnimationFrame(renderFrame);
+  }
+
+  function renderFrame() {
+    frame = 0;
+    if (!canMove()) return;
+
+    const bounds = hero.getBoundingClientRect();
+    const inside = point && point.x >= bounds.left && point.x <= bounds.right
+      && point.y >= bounds.top && point.y <= bounds.bottom;
+    const lightX = inside ? point.x - bounds.left - bounds.width / 2 : 0;
+    const lightY = inside ? point.y - bounds.top - bounds.height / 2 : 0;
+    const targets = {
+      x: inside ? 2 * lightX / bounds.width : 0,
+      y: inside ? 2 * lightY / bounds.height : 0,
+      scroll: Math.max(-22, Math.min(37, (window.innerHeight * .15 - bounds.top) * .16)),
+    };
+
+    let moving = false;
+    for (const key of Object.keys(current)) {
+      const difference = targets[key] - current[key];
+      if (Math.abs(difference) < .015) {
+        current[key] = targets[key];
+      } else {
+        current[key] += difference * .15;
+        moving = true;
+      }
+    }
+
+    const { x, y, scroll } = current;
+    const layers = [-x * 26, scroll - y * 23, -x * 8, scroll * .32 - y * 7, x * 12.5, y * 12.5];
+    properties.forEach((property, index) => hero.style.setProperty(property, layers[index].toFixed(2) + "px"));
+    if (moving) requestFrame();
+  }
+
+  function refreshMotion() {
+    const enabled = canMove();
+    hero.toggleAttribute("data-motion", enabled);
+    if (enabled) {
+      requestFrame();
+    } else {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      point = null;
+      Object.assign(current, neutral);
+      properties.forEach((property) => hero.style.removeProperty(property));
+    }
+  }
+
+  hero.addEventListener("pointermove", (event) => {
+    if (!canMove() || event.pointerType === "touch") return;
+    point = { x: event.clientX, y: event.clientY };
+    requestFrame();
+  }, { passive: true });
+  hero.addEventListener("pointerleave", () => {
+    point = null;
+    requestFrame();
+  });
+  window.addEventListener("scroll", requestFrame, { passive: true });
+  window.addEventListener("resize", requestFrame, { passive: true });
+  finePointer.addEventListener("change", refreshMotion);
+  reducedMotion.addEventListener("change", refreshMotion);
+
+  new IntersectionObserver(([entry]) => {
+    visible = entry.isIntersecting;
+    refreshMotion();
+  }).observe(hero);
+}
+
+function setupGallery() {
+  const gallery = $("galerie");
+  if (gallery.hidden) return;
+
+  const rail = $("gallery-rail");
+  const controls = $("gallery-controls");
+  const toggle = $("gallery-play");
+  const slides = [...rail.children];
+  const video = rail.querySelector("video");
+  const videoSlide = video.closest(".gallery-slide");
+  let visible = false;
+  let hovering = false;
+  let paused = false;
+  let resumedFromToggle = false;
+  let current = 0;
+  let target = null;
+  let animationFrame = 0;
+  let autoTimer = 0;
+  let settledTimer = 0;
+
+  function slideOffset(index) {
+    return Math.min(slides[index].offsetLeft, rail.scrollWidth - rail.clientWidth);
+  }
+
+  function lastPosition() {
+    const end = rail.scrollWidth - rail.clientWidth;
+    const last = slides.findIndex((_, index) => slideOffset(index) >= end - 1);
+    return last < 0 ? slides.length - 1 : last;
+  }
+
+  function updatePosition() {
+    animationFrame = 0;
+    current = slides.reduce((nearest, _, index) =>
+      Math.abs(rail.scrollLeft - slideOffset(index)) < Math.abs(rail.scrollLeft - slideOffset(nearest))
+        ? index : nearest, 0);
+  }
+
+  function scheduleAdvance() {
+    window.clearTimeout(autoTimer);
+    const focused = document.activeElement;
+    const hasFocus = gallery.contains(focused) && !(focused === toggle && resumedFromToggle);
+    if (!visible || hovering || paused || reducedMotion.matches || document.hidden
+      || hasFocus || !video.paused || settledTimer) return;
+    autoTimer = window.setTimeout(() => advance(1, false), 6000);
+  }
+
+  function showSlide(index, announce) {
+    target = index;
+    rail.scrollTo({
+      left: slideOffset(index),
+      behavior: reducedMotion.matches || Math.abs(index - current) > 1 ? "instant" : "smooth",
+    });
+    if (announce) {
+      const title = slides[index].querySelector("figcaption").textContent;
+      $("gallery-update").textContent = title;
+    }
+    scheduleAdvance();
+  }
+
+  function advance(step, announce) {
+    const length = lastPosition() + 1;
+    if (length < 2) return;
+    const index = (length + Math.min(target ?? current, length - 1) + step) % length;
+    showSlide(index, announce);
+  }
+
+  function updatePlaybackButton() {
+    toggle.hidden = reducedMotion.matches;
+    toggle.textContent = paused ? "Reprendre" : "Pause";
+    toggle.setAttribute("aria-label", paused ? "Reprendre le défilement" : "Mettre le défilement en pause");
+    scheduleAdvance();
+  }
+
+  $("gallery-prev").addEventListener("click", () => advance(-1, true));
+  $("gallery-next").addEventListener("click", () => advance(1, true));
+  toggle.addEventListener("click", () => {
+    paused = !paused;
+    resumedFromToggle = !paused;
+    updatePlaybackButton();
+  });
+  rail.addEventListener("keydown", (event) => {
+    if (event.target !== rail || !["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Home") showSlide(0, true);
+    else if (event.key === "End") showSlide(lastPosition(), true);
+    else advance(event.key === "ArrowRight" ? 1 : -1, true);
+  });
+  rail.addEventListener("scroll", () => {
+    window.clearTimeout(autoTimer);
+    if (!animationFrame) animationFrame = requestAnimationFrame(updatePosition);
+    window.clearTimeout(settledTimer);
+    settledTimer = window.setTimeout(() => {
+      settledTimer = 0;
+      target = null;
+      const videoBounds = video.getBoundingClientRect();
+      const railBounds = rail.getBoundingClientRect();
+      if (videoBounds.right <= railBounds.left + 2 || videoBounds.left >= railBounds.right - 2) video.pause();
+      scheduleAdvance();
+    }, 160);
+  }, { passive: true });
+  rail.addEventListener("pointerenter", (event) => {
+    if (event.pointerType === "mouse") hovering = true;
+    scheduleAdvance();
+  });
+  rail.addEventListener("pointerleave", () => {
+    hovering = false;
+    scheduleAdvance();
+  });
+  gallery.addEventListener("focusin", scheduleAdvance);
+  gallery.addEventListener("focusout", (event) => {
+    if (event.target === toggle) resumedFromToggle = false;
+    queueMicrotask(scheduleAdvance);
+  });
+  for (const event of ["play", "pause", "ended"]) {
+    video.addEventListener(event, () => {
+      videoSlide.classList.toggle("is-playing", !video.paused && !video.ended);
+      scheduleAdvance();
+    });
+  }
+  document.addEventListener("visibilitychange", scheduleAdvance);
+  window.addEventListener("resize", updatePosition, { passive: true });
+  reducedMotion.addEventListener("change", updatePlaybackButton);
+  new IntersectionObserver(([entry]) => {
+    visible = entry.isIntersecting;
+    scheduleAdvance();
+  }, { threshold: .25 }).observe(rail);
+
+  controls.hidden = false;
+  updatePosition();
+  updatePlaybackButton();
+}
+
+setupParallax($("accueil-classique"));
+setupGallery();

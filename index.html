@@ -1,425 +1,201 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>UATM GASA Vie Étudiante & Activités</title>
-  <link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Votez pour les activités du campus UATM GASA, partagez votre avis et découvrez la prochaine séance.">
+  <meta name="theme-color" content="#f7f5ef">
+  <title>Vie étudiante — UATM GASA</title>
+  <script src="/student-interface.js"></script>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/images/app-icon-192.png">
   <link rel="icon" href="images/logo.webp" type="image/webp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&amp;family=Instrument+Serif:ital@1&amp;family=Manrope:wght@400;600;700;800&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/student-themes.css">
+  <link rel="stylesheet" href="/student-polls.css">
+  <script defer src="script.js"></script>
 </head>
 <body>
+  <a class="skip-link" href="#contenu">Aller au contenu</a>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 10h18"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 6-8 11-8 11S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+  </svg>
 
-  <!-- NAVIGATION MODERNE -->
-  <nav>
-    <a href="#carousel" class="brand">
-      <img src="images/logo.webp" alt="Logo UATM GASA">
-    </a>
-    <div class="nav-right">
-      <a href="#edition-passee" class="nav-link">Édition #1 & Avis</a>
-      <a href="#espace-vote" class="nav-link">Votes</a>
-      <button type="button" class="btn-nav-modern" id="authBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-          <circle cx="12" cy="7" r="4"></circle>
-        </svg>
-        <span id="authBtnLabel">Se connecter</span>
-      </button>
-    </div>
-  </nav>
-
-  <!-- 1. HERO CARROUSEL (CINÉMA + 6 ACTIVITÉS) -->
-  <header id="carousel">
-    
-    <!-- SLIDE 1 : CINÉMA -->
-    <div class="slide active" data-bg="images/cinema.jpg" data-activity-key="cinema">
-      <div class="slide-content">
-        <p class="hero-hook">Le campus s'allume quand les cours s'arrêtent.</p>
-        <span class="kicker">01 / PROCHAINEMENT • PROGRAMMÉ</span>
-        <h1>Cinéma</h1>
-        <div class="meta-film">
-          <svg class="film-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect>
-            <line x1="7" y1="2" x2="7" y2="22"></line>
-            <line x1="17" y1="2" x2="17" y2="22"></line>
-            <line x1="2" y1="12" x2="22" y2="12"></line>
-            <line x1="2" y1="7" x2="7" y2="7"></line>
-            <line x1="2" y1="17" x2="7" y2="17"></line>
-            <line x1="17" y1="17" x2="22" y2="17"></line>
-            <line x1="17" y1="7" x2="22" y2="7"></line>
-          </svg>
-          <span>Vendredi 27 Nov • 18h30</span>
-          <span class="countdown" id="countdown">• J-11 : 18H</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="cinema">Voter pour le thème du film</a>
-        </div>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="/" aria-label="UATM GASA, accueil">
+        <img src="images/logo.webp" width="40" height="40" alt="">
+        <span class="student-brand-copy"><strong>UATM GASA</strong><small>Vie étudiante</small></span>
+      </a>
+      <nav class="site-nav" aria-label="Navigation principale">
+        <a href="#vote" data-nav="vote">Voter</a>
+        <a href="#avis" data-nav="avis">Donner mon avis</a>
+        <a href="#annonce" data-nav="annonce">Prochaine séance</a>
+      </nav>
+      <div class="header-actions">
+        <button class="theme-toggle" id="student-theme" type="button" aria-label="Activer le thème sombre" title="Activer le thème sombre">
+          <svg class="icon theme-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.8 13.4A8.9 8.9 0 0 1 10.6 3.2 9 9 0 1 0 20.8 13.4Z"/></svg>
+          <svg class="icon theme-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <a class="admin-link" href="/admin"><span class="nav-long">Espace comité</span><span class="nav-short">Comité</span></a>
       </div>
     </div>
-
-    <!-- SLIDE 2 : CONFÉRENCE & DÉBAT -->
-    <div class="slide" data-bg="images/im18.jpeg" data-activity-key="conference">
-      <div class="slide-content">
-        <p class="hero-hook">Échangez avec des experts et des entrepreneurs.</p>
-        <span class="kicker">02 / SAVOIR & VISION</span>
-        <h1>Conférence & Débat</h1>
-        <div class="meta-film">
-          <span>Mercredi 02 Déc • 15h00</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="conference">Choisir le thème du débat</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- SLIDE 3 : HACKATHON CAMPUS -->
-    <div class="slide" data-bg="images/im5.jpeg" data-activity-key="hackathon">
-      <div class="slide-content">
-        <p class="hero-hook">24 heures pour innover et coder en équipe.</p>
-        <span class="kicker">03 / INNOVATION</span>
-        <h1>Hackathon Campus</h1>
-        <div class="meta-film">
-          <span>Samedi 05 Déc • 09h00</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="hackathon">Voter pour le défi</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- SLIDE 4 : ATELIER CARRIÈRE -->
-    <div class="slide" data-bg="images/im19.jpeg" data-activity-key="atelier">
-      <div class="slide-content">
-        <p class="hero-hook">Préparez votre avenir professionnel dès aujourd'hui.</p>
-        <span class="kicker">04 / COMPÉTENCES</span>
-        <h1>Atelier Carrière</h1>
-        <div class="meta-film">
-          <span>Mercredi 09 Déc • 14h30</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="atelier">Choisir le module</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- SLIDE 5 : TOURNOI E-SPORT -->
-    <div class="slide" data-bg="images/cinema.jpg" data-activity-key="esport">
-      <div class="slide-content">
-        <p class="hero-hook">Stratégie, réflexes et esprit d'équipe.</p>
-        <span class="kicker">05 / COMPÉTITION</span>
-        <h1>Tournoi E-Sport</h1>
-        <div class="meta-film">
-          <span>Vendredi 11 Déc • 16h00</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="esport">Voter pour le jeu</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- SLIDE 6 : SCÈNE OUVERTE -->
-    <div class="slide" data-bg="images/scene.jpg" data-activity-key="scene">
-      <div class="slide-content">
-        <p class="hero-hook">Votre voix, votre musique, votre expression.</p>
-        <span class="kicker">06 / EXPRESSION</span>
-        <h1>Scène Ouverte</h1>
-        <div class="meta-film">
-          <span>Samedi 12 Déc • 16h00</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="scene">Choisir le format</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- SLIDE 7 : TOURNOI INTER-FILIÈRES -->
-    <div class="slide" data-bg="images/im4.jpeg" data-activity-key="sport">
-      <div class="slide-content">
-        <p class="hero-hook">L'énergie du collectif sur le terrain.</p>
-        <span class="kicker">07 / SPORT</span>
-        <h1>Tournoi Inter-Filières</h1>
-        <div class="meta-film">
-          <span>Samedi 19 Déc • 08h30</span>
-        </div>
-        <div class="slide-actions">
-          <a href="#espace-vote" class="cta-link select-activity-trigger" data-activity-key="sport">Voter pour la discipline</a>
-        </div>
-      </div>
-    </div>
-
-    <!-- DÉCOR DE FOND + BLUR GAUCHE -->
-    <div class="bg-stage">
-      <div class="bg-layer" id="bgCurrent" style="background-image: url('images/cinema.jpg');"></div>
-      <div class="bg-layer bg-next" id="bgNext"></div>
-      <div class="bg-left-blur"></div>
-      <div class="bg-overlay"></div>
-    </div>
-
-    <!-- CONTRÔLES DU CARROUSEL -->
-    <div class="carousel-controls">
-      <div class="indicators">
-        <button class="dot active" data-index="0" aria-label="Cinéma"></button>
-        <button class="dot" data-index="1" aria-label="Conférence"></button>
-        <button class="dot" data-index="2" aria-label="Hackathon"></button>
-        <button class="dot" data-index="3" aria-label="Atelier"></button>
-        <button class="dot" data-index="4" aria-label="E-Sport"></button>
-        <button class="dot" data-index="5" aria-label="Scène Ouverte"></button>
-        <button class="dot" data-index="6" aria-label="Sport"></button>
-      </div>
-
-      <button class="creative-next" id="nextTrigger" aria-label="Activité suivante">
-        <span class="next-label">SUIVANT</span>
-        <div class="progress-ring">
-          <svg viewBox="0 0 60 60">
-            <circle class="ring-bg" cx="30" cy="30" r="28"></circle>
-            <circle class="ring-fill" id="ringFill" cx="30" cy="30" r="28"></circle>
-          </svg>
-          <span class="ring-dot"></span>
-        </div>
-      </button>
-    </div>
-
   </header>
-  <!-- 2. ÉDITION 1 : GALERIE PHOTOS & VIDÉOS + COMMENTAIRES SÉANCE PASSÉE -->
-  <section id="edition-passee" class="past-edition-section">
-    <div class="section-header-flex">
-      <div>
-        <span class="kicker">SOUVENIRS & RETOURS</span>
-        <h2>Édition 1 — Séance passée</h2>
+
+  <main id="contenu" tabindex="-1">
+    <section class="shell campus-cover" id="accueil-classique" aria-labelledby="campus-cover-title">
+      <div class="campus-cover-art" aria-hidden="true">
+        <img src="/images/scene.jpg" alt="" width="1050" height="700" loading="lazy">
       </div>
-      <span class="media-badge">Photos & Vidéos du campus</span>
+      <div class="campus-cover-content">
+        <h1 id="campus-cover-title">Le campus<br>se vit <em>ensemble.</em></h1>
+        <p class="campus-cover-intro">Du prochain rendez-vous aux souvenirs de la dernière séance, c’est vous qui faites vivre le campus.</p>
+        <a class="campus-cover-cta" id="campus-cover-cta" href="#vote">Voter pour une activité</a>
+      </div>
+    </section>
+
+    <noscript><p class="notice shell">Activez JavaScript pour charger les séances et envoyer votre réponse.</p></noscript>
+    <div class="notice load-error shell" id="load-error" hidden>
+      <p id="load-error-text"></p>
+      <button class="button button-outline" id="retry-load" type="button">Réessayer</button>
     </div>
 
-    <div class="marquee-track">
-      <div class="marquee-content">
-        <div class="media-slot"><img src="images/im5.jpeg" alt="Projection campus 1"></div>
-        <div class="media-slot video-slot"><video src="videos/vid6.MP4" poster="images/im5.jpeg" autoplay loop muted playsinline></video><span class="vid-tag">VIDÉO</span></div>
-        <div class="media-slot"><img src="images/im18.jpeg" alt="Projection campus 2"></div>
-        <div class="media-slot"><img src="images/im4.jpeg" alt="Scène campus"></div>
-        <div class="media-slot"><img src="images/im3.jpeg" alt="Projection campus 3"></div>
-
-        <!-- Duplication pour boucle infinie fluide -->
-        <div class="media-slot"><img src="images/im6.jpeg" alt="Projection campus 4"></div>
-        <div class="media-slot video-slot"><video src="videos/vid6.MP4" poster="images/im6.jpeg" autoplay loop muted playsinline></video><span class="vid-tag">VIDÉO</span></div>
-        <div class="media-slot"><img src="images/im2.jpeg" alt="Projection campus 5"></div>
-        <div class="media-slot"><img src="images/im1.jpeg" alt="Projection campus 6"></div>
-        <div class="media-slot"><img src="images/im19.jpeg" alt="Projection campus 7"></div>
-      </div>
-    </div>
-
-    <div class="comments-block">
-      <div class="comments-top">
-        <div class="comments-title-group">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
-          </svg>
-          <h3>Vos impressions sur la dernière projection</h3>
+    <section class="shell page-section vote-section" id="vote" aria-labelledby="vote-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="vote-title" tabindex="-1">À vous de choisir</h2>
+          <p id="vote-intro">Choisissez une activité pour découvrir sa question.</p>
         </div>
-        <span class="comments-counter" id="commentsCounter">3 avis</span>
+        <span class="status-tag" id="vote-status" hidden></span>
       </div>
+      <div id="vote-content" aria-busy="true"><p class="notice" role="status">Chargement du sondage…</p></div>
+    </section>
 
-      <form class="editorial-comment-form" id="commentForm">
-        <input type="text" id="commentAuthorInput" class="author-small-input" placeholder="Nom & Filière (ex: Marc • L2 RIT)" maxlength="35">
-        <div class="comment-input-box">
-          <input type="text" id="commentTextInput" placeholder="Partagez votre avis sur l'ambiance, le film ou l'organisation..." required>
-          <button type="submit">Publier</button>
-        </div>
-      </form>
-
-      <div class="comments-grid" id="commentsGrid"></div>
-    </div>
-  </section>
-  <!-- 3. GRILLE BENTO UNIFIÉE : SONDAGE CONTEXTUEL & CHOIX D'ACTIVITÉ -->
-  <main id="espace-vote" class="bento-section">
-    <div class="bento-grid">
-
-      <!-- BLOC GAUCHE : SONDAGE DYNAMIQUE SELON L'ACTIVITÉ CHOISIE -->
-      <div class="bento-card bento-films">
-        <div class="bento-head">
+    <div class="past-edition" id="edition">
+      <section class="shell page-section feedback-section" id="avis" aria-labelledby="feedback-title">
+        <div class="section-heading">
           <div>
-            <span class="kicker" id="dynamicPollKicker">01 • ACTIVITÉ PROGRAMMÉE : CINÉMA</span>
-            <h2 id="dynamicPollTitle">Quel genre éducatif pour la projection ?</h2>
+            <h2 id="feedback-title" tabindex="-1">Vos impressions sur la dernière séance</h2>
+            <p id="feedback-intro">Partagez vos impressions sur la dernière séance.</p>
           </div>
-          <span class="vote-hint">Cliquez pour voter</span>
+          <span class="status-tag" id="feedback-status" hidden></span>
         </div>
+        <div id="feedback-content" aria-busy="true"><p class="notice" role="status">Chargement du formulaire…</p></div>
+      </section>
 
-        <div class="cinema-list" id="dynamicOptionsList">
-          <div class="cinema-row" data-opt="0">
-            <img src="images/cinema.jpg" alt="Documentaire & Innovation">
-            <div class="cinema-row-overlay"></div>
-            <div class="cinema-row-content">
-              <div class="cinema-info">
-                <span class="cinema-tag" id="optTag0">Sciences & Technologie</span>
-                <h3 id="optTitle0">Documentaire & Innovation</h3>
-              </div>
-              <div class="cinema-stat">
-                <span class="movie-score" id="optScore0">52%</span>
-                <span class="radio-circle"></span>
-              </div>
+      <section class="page-section gallery" id="galerie" aria-labelledby="gallery-title">
+        <div class="gallery-header shell">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">Souvenirs &amp; retours</p>
+              <h2 id="gallery-title">Édition 1 — Séance passée</h2>
             </div>
-            <div class="cinema-progress" id="optBar0" style="width: 52%"></div>
           </div>
-
-          <div class="cinema-row" data-opt="1">
-            <img src="images/im18.jpeg" alt="Biopic & Entrepreneuriat">
-            <div class="cinema-row-overlay"></div>
-            <div class="cinema-row-content">
-              <div class="cinema-info">
-                <span class="cinema-tag" id="optTag1">Parcours & Réussite</span>
-                <h3 id="optTitle1">Biopic & Entrepreneuriat</h3>
-              </div>
-              <div class="cinema-stat">
-                <span class="movie-score" id="optScore1">31%</span>
-                <span class="radio-circle"></span>
-              </div>
-            </div>
-            <div class="cinema-progress" id="optBar1" style="width: 31%"></div>
-          </div>
-
-          <div class="cinema-row" data-opt="2">
-            <img src="images/im19.jpeg" alt="Histoire & Enjeux de Société">
-            <div class="cinema-row-overlay"></div>
-            <div class="cinema-row-content">
-              <div class="cinema-info">
-                <span class="cinema-tag" id="optTag2">Culture & Réflexion</span>
-                <h3 id="optTitle2">Histoire & Enjeux de Société</h3>
-              </div>
-              <div class="cinema-stat">
-                <span class="movie-score" id="optScore2">17%</span>
-                <span class="radio-circle"></span>
-              </div>
-            </div>
-            <div class="cinema-progress" id="optBar2" style="width: 17%"></div>
+          <div class="gallery-controls" id="gallery-controls" hidden>
+            <button type="button" class="button button-outline" id="gallery-prev" aria-controls="gallery-rail">Précédent</button>
+            <button type="button" class="button button-outline" id="gallery-next" aria-controls="gallery-rail">Suivant</button>
+            <button type="button" class="button button-outline" id="gallery-play" aria-controls="gallery-rail">Pause</button>
           </div>
         </div>
-      </div>
-
-      <!-- BLOC DROITE : SONDAGE DES ACTIVITÉS À PROGRAMMER -->
-      <div class="bento-card bento-poll">
-        <div class="bento-head">
-          <div>
-            <span class="kicker">02 • PROCHAINE ACTIVITÉ</span>
-            <h2>Quelle activité programmer ?</h2>
-          </div>
+        <p class="visually-hidden" id="gallery-update" role="status"></p>
+        <div class="gallery-rail" id="gallery-rail" tabindex="0" role="region" aria-label="Photos et vidéo de la première projection">
+          <figure class="gallery-slide">
+            <img src="images/im5.jpeg" alt="Un intervenant prend la parole devant l’écran" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">Au micro</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <video controls playsinline preload="none" poster="images/im6.jpeg" aria-label="Vidéo de la projection sur le campus" width="280" height="175" src="videos/vid6.MP4"></video>
+            <figcaption class="video-label">Vidéo</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <img src="images/im18.jpeg" alt="La présentation de la projection vue de face" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">La présentation</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <img src="images/im4.jpeg" alt="Les étudiants sont rassemblés devant l’écran" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">Dans la salle de projection</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <img src="images/im3.jpeg" alt="Le public de la séance vu de côté" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">Le public</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <img src="images/im6.jpeg" alt="La projection en cours dans la pénombre" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">Pendant la projection</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <img src="images/im1.jpeg" alt="Des étudiants discutent avant le début de la séance" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">Avant la séance</figcaption>
+          </figure>
+          <figure class="gallery-slide">
+            <img src="images/im2.jpeg" alt="Une vue latérale des rangs de la salle" width="280" height="175" loading="lazy" decoding="async">
+            <figcaption class="visually-hidden">Les étudiants dans la salle</figcaption>
+          </figure>
         </div>
-
-        <div class="studio-poll" id="pollOptions">
-          <button type="button" class="studio-option voted" data-option="0" data-activity-key="cinema">
-            <div class="studio-fill" style="width: 42%"></div>
-            <div class="studio-text">
-              <span class="studio-check"></span>
-              <span class="poll-title">Séance Cinéma Éducatif</span>
-            </div>
-            <span class="poll-percent">42%</span>
-          </button>
-
-          <button type="button" class="studio-option" data-option="1" data-activity-key="conference">
-            <div class="studio-fill" style="width: 24%"></div>
-            <div class="studio-text">
-              <span class="studio-check"></span>
-              <span class="poll-title">Conférence & Débat</span>
-            </div>
-            <span class="poll-percent">24%</span>
-          </button>
-
-          <button type="button" class="studio-option" data-option="2" data-activity-key="hackathon">
-            <div class="studio-fill" style="width: 19%"></div>
-            <div class="studio-text">
-              <span class="studio-check"></span>
-              <span class="poll-title">Hackathon Campus</span>
-            </div>
-            <span class="poll-percent">19%</span>
-          </button>
-
-          <button type="button" class="studio-option" data-option="3" data-activity-key="atelier">
-            <div class="studio-fill" style="width: 15%"></div>
-            <div class="studio-text">
-              <span class="studio-check"></span>
-              <span class="poll-title">Atelier Carrière & Leadership</span>
-            </div>
-            <span class="poll-percent">15%</span>
-          </button>
-        </div>
-
-        <div class="bento-chat-cta">
-          <p>Cliquez sur une activité ci-dessus pour adapter le sondage à gauche.</p>
-          <div class="bento-cta-links">
-            <a href="https://wa.me" target="_blank" class="wa-link">Recevoir les alertes WhatsApp (69 19 72 12)</a>
-          </div>
-        </div>
-      </div>
+      </section>
 
     </div>
+
+    <section class="shell page-section announcement-section" id="annonce" aria-labelledby="announcement-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="announcement-title" tabindex="-1">Prochaine séance</h2>
+          <p id="announcement-intro">Retrouvez ici l’activité retenue par le comité.</p>
+        </div>
+        <span class="status-tag" id="announcement-status" hidden></span>
+      </div>
+      <div id="announcement-content" aria-busy="true"><p class="notice" role="status">Chargement de l’annonce…</p></div>
+    </section>
   </main>
 
-  <!-- PIED DE PAGE -->
   <footer class="site-footer">
-    <div class="footer-left">
-      <span class="footer-brand">UATM GASA FORMATION</span>
-      <span class="footer-sep">•</span>
-      <span>Vie Étudiante & Activités Extra-Scolaires</span>
-    </div>
-    <div class="footer-right">
-      <span>Contact : +229 69 19 72 12 • Cotonou</span>
+    <div class="shell footer-inner">
+      <a class="brand" href="/" aria-label="UATM GASA, accueil">
+        <img src="images/logo.webp" width="34" height="34" alt="">
+        <span><strong>UATM GASA</strong><small>Vie étudiante</small></span>
+      </a>
+      <button class="student-account" id="student-account" type="button">Connexion étudiante</button>
+      <div class="notification-controls">
+        <button class="button button-outline" id="student-push" type="button" hidden>Activer les notifications</button>
+        <p id="student-push-status" role="status" hidden></p>
+      </div>
     </div>
   </footer>
-
-  <!-- MODALE PROFIL / CONNEXION ÉTUDIANT -->
-  <div class="modal-backdrop" id="authModalBackdrop">
-    <div class="auth-modal" id="authModal">
-      <div class="auth-modal-head">
-        <h3 id="authModalTitle">Espace Étudiant</h3>
-        <button type="button" class="fb-close-btn" id="closeAuthBtn" aria-label="Fermer">&times;</button>
-      </div>
-      
-      <form id="loginForm" class="auth-form">
-        <p class="auth-desc">Renseignez vos informations UATM GASA pour signer vos commentaires et participer aux votes.</p>
-        
-        <input type="text" id="loginName" placeholder="Nom & Prénom" required>
-
-        <div class="field-group">
-          <label for="loginDob">Date de naissance</label>
-          <input type="date" id="loginDob" required>
-        </div>
-
-        <div class="form-row-2">
-          <div class="field-group">
-            <label for="loginNiveau">Niveau</label>
-            <select id="loginNiveau" required>
-              <option value="" disabled selected>Niveau</option>
-              <option value="L1">Licence 1 (L1)</option>
-              <option value="L2">Licence 2 (L2)</option>
-              <option value="L3">Licence 3 (L3)</option>
-            </select>
-          </div>
-
-          <div class="field-group">
-            <label for="loginFiliere">Filière</label>
-            <select id="loginFiliere" required>
-              <option value="" disabled selected>Filière</option>
-              <option value="RIT">RIT</option>
-              <option value="SIL">SIL</option>
-              <option value="SI">SI</option>
-            </select>
-          </div>
-        </div>
-
-        <button type="submit" class="btn-pill-light full-btn">Se connecter</button>
-      </form>
-
-      <div id="profileView" class="profile-view" style="display: none;">
-        <div class="profile-card">
-          <div class="profile-avatar" id="profileInitials">ET</div>
-          <div>
-            <h4 id="profileDisplayName">Étudiant GASA</h4>
-            <span id="profileDisplayFiliere">L2 • SIL</span>
-            <small id="profileDisplayDob" class="profile-dob">Né(e) le 01/01/2005</small>
-          </div>
-        </div>
-        <button type="button" id="logoutBtn" class="btn-logout">Se déconnecter</button>
-      </div>
+  <dialog id="student-dialog" class="student-dialog" aria-labelledby="student-dialog-title">
+    <div class="student-dialog-head">
+      <h2 id="student-dialog-title">Connexion étudiante</h2>
+      <button class="button button-outline" id="student-dialog-close" type="button">Fermer</button>
     </div>
-  </div>
-
-  <script src="script.js"></script>
+    <p id="student-dialog-context" class="student-dialog-note" hidden>Connectez-vous pour envoyer votre réponse.</p>
+    <div id="student-profile" hidden>
+      <p id="student-profile-name"></p>
+      <p id="student-profile-email" class="student-dialog-note"></p>
+      <button class="button button-dark" id="student-logout" type="button">Se déconnecter</button>
+    </div>
+    <form id="student-form">
+      <label for="student-name" id="student-name-row" hidden>Nom complet
+        <input id="student-name" name="name" autocomplete="name" maxlength="100">
+      </label>
+      <label for="student-email">Adresse e-mail
+        <input type="email" id="student-email" name="email" autocomplete="username" required maxlength="254">
+      </label>
+      <label for="student-password">Mot de passe
+        <input type="password" id="student-password" name="password" autocomplete="current-password" required maxlength="128">
+      </label>
+      <label for="student-access-code" id="student-code-row" hidden>Code d’accès du campus
+        <input id="student-access-code" name="accessCode" autocomplete="off" maxlength="160">
+      </label>
+      <div class="student-dialog-actions">
+        <button class="button button-dark" id="student-submit" type="submit">Se connecter</button>
+        <button class="button button-outline" id="student-mode" type="button">Créer un compte</button>
+      </div>
+    </form>
+    <p id="student-error" class="form-error" role="alert" hidden></p>
+  </dialog>
 </body>
 </html>
