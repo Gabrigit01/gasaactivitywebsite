@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UATM GASA — Dashboard Organisateur</title>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+
+  <!-- ÉCRAN DE VERROUILLAGE ORGANISATEUR -->
+  <div class="pin-overlay" id="pinOverlay">
+    <div class="pin-card">
+      <img src="images/logo.webp" alt="Logo UATM GASA" class="pin-logo">
+      <span class="kicker">ESPACE ORGANISATEUR</span>
+      <h2>Accès Bureau & Comité</h2>
+      <p>Entrez le code PIN organisateur pour accéder au tableau de bord.</p>
+      <form id="pinForm" class="pin-form">
+        <input type="password" id="pinInput" placeholder="••••" maxlength="6" required autofocus>
+        <button type="submit" class="btn-primary">Déverrouiller</button>
+      </form>
+      <span class="pin-error" id="pinError"></span>
+      <a href="mainpage.html" class="back-site-link">Retour au site étudiant</a>
+    </div>
+  </div>
+
+  <!-- INTERFACE PRINCIPALE DU DASHBOARD -->
+  <div class="admin-layout" id="adminApp" style="display: none;">
+    
+    <!-- BARRE LATÉRALE -->
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand-box">
+          <img src="images/logo.webp" alt="UATM GASA">
+          <div>
+            <strong>UATM GASA</strong>
+            <span>Comité Activités</span>
+          </div>
+        </div>
+
+        <nav class="side-nav">
+          <a href="#section-kpis" class="side-link active">Vue d'ensemble</a>
+          <a href="#section-sondages" class="side-link">Résultats Sondages</a>
+          <a href="#section-commentaires" class="side-link">Modération Avis</a>
+          <a href="#section-etudiants" class="side-link">Profils & Export</a>
+        </nav>
+      </div>
+
+      <div class="sidebar-bottom">
+        <a href="mainpage.html" target="_blank" class="btn-outline full-w">Voir le site public</a>
+        <button type="button" id="lockBtn" class="btn-danger-ghost full-w">Verrouiller</button>
+      </div>
+    </aside>
+
+    <!-- CONTENU PRINCIPAL -->
+    <main class="main-content">
+      
+      <!-- EN-TÊTE -->
+      <header class="topbar">
+        <div>
+          <span class="kicker">TABLEAU DE BORD • COTONOU</span>
+          <h1>Pilotage Vie Étudiante</h1>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" id="copyWhatsappReport" class="btn-primary">Copier bilan WhatsApp</button>
+          <button type="button" id="resetVotesBtn" class="btn-outline">Réinitialiser votes</button>
+        </div>
+      </header>
+
+      <!-- 1. INDICATEURS CLÉS (KPIs) -->
+      <section id="section-kpis" class="kpi-grid">
+        <div class="kpi-card">
+          <span class="kpi-label">Activité en tête</span>
+          <strong class="kpi-value accent" id="kpiTopActivity">Cinéma Éducatif</strong>
+          <small class="kpi-sub" id="kpiTopActivityPct">42% des intentions</small>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-label">Total votes activités</span>
+          <strong class="kpi-value" id="kpiTotalActVotes">100</strong>
+          <small class="kpi-sub">Cumul sur 4 propositions</small>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-label">Votes thématiques</span>
+          <strong class="kpi-value" id="kpiTotalThemeVotes">700</strong>
+          <small class="kpi-sub">Sur les 7 activités du campus</small>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-label">Avis Édition #1</span>
+          <strong class="kpi-value" id="kpiCommentsCount">3</strong>
+          <small class="kpi-sub">Retours étudiants publiés</small>
+        </div>
+      </section>
+
+      <!-- 2. RÉSULTATS DES SONDAGES -->
+      <section id="section-sondages" class="dashboard-grid-2">
+        
+        <!-- Colonne 1 : Priorité des prochaines activités -->
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="kicker">SONDAGE GLOBAL</span>
+              <h3>Prochaine activité à programmer</h3>
+            </div>
+          </div>
+          <div class="bars-container" id="adminActivityBars"></div>
+        </div>
+
+        <!-- Colonne 2 : Détail par activité (Films éducatifs, Débats, Jeux...) -->
+        <div class="panel-card">
+          <div class="panel-head">
+            <div>
+              <span class="kicker">DÉTAIL THÉMATIQUE</span>
+              <h3>Choix par activité</h3>
+            </div>
+            <select id="activitySelector" class="admin-select">
+              <option value="cinema">01. Cinéma Éducatif</option>
+              <option value="conference">02. Conférence & Débat</option>
+              <option value="hackathon">03. Hackathon Campus</option>
+              <option value="atelier">04. Atelier Carrière</option>
+              <option value="esport">05. Tournoi E-Sport</option>
+              <option value="scene">06. Scène Ouverte</option>
+              <option value="sport">07. Tournoi Inter-Filières</option>
+            </select>
+          </div>
+          <div class="bars-container" id="adminThemeBars"></div>
+        </div>
+
+      </section>
+
+      <!-- 3. MODÉRATION DES COMMENTAIRES ÉDITION #1 -->
+      <section id="section-commentaires" class="panel-card">
+        <div class="panel-head">
+          <div>
+            <span class="kicker">ÉDITION #1 • RETOURS ÉTUDIANTS</span>
+            <h3>Modération des commentaires</h3>
+          </div>
+          <span class="badge-info" id="modCountBadge">3 commentaires</span>
+        </div>
+
+        <div class="table-wrapper">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Étudiant & Filière</th>
+                <th>Commentaire publié</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="adminCommentsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 4. PROFILS CONNECTÉS & EXPORT -->
+      <section id="section-etudiants" class="panel-card">
+        <div class="panel-head">
+          <div>
+            <span class="kicker">SESSION LOCALE & CONTACT</span>
+            <h3>Dernier profil étudiant enregistré</h3>
+          </div>
+          <a href="https://wa.me" target="_blank" class="wa-btn">Ouvrir WhatsApp (+229 69 19 72 12)</a>
+        </div>
+        <div id="studentProfileSummary" class="profile-summary-box"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="admin.js"></script>
+</body>
+</html>
