@@ -793,7 +793,7 @@ app.get('/manifest.webmanifest', (_req, res) => {
 });
 app.use('/images', express.static(resolve(root, 'images')));
 app.use('/videos', express.static(resolve(root, 'videos')));
-app.get(['/', '/mainpage.html'], (_req, res) => res.sendFile(resolve(root, 'mainpage.html')));
+app.get(['/', '/index.html', '/mainpage.html'], (_req, res) => res.sendFile(resolve(root, 'index.html')));
 app.get(['/admin', '/admin.html'], (_req, res) => res.sendFile(resolve(root, 'admin.html')));
 for (const file of ['style.css', 'student-themes.css', 'student-polls.css', 'script.js', 'student-interface.js', 'admin.css', 'admin.js']) {
   app.get(`/${file}`, (_req, res) => res.sendFile(resolve(root, file)));

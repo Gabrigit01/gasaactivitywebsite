@@ -68,6 +68,14 @@ for (const dialect of ['sqlite', 'postgres']) {
     let origin = await start();
     const visitor = client(origin);
     assert.equal((await visitor.request('/healthz')).status, 200);
+    for (const path of ['/', '/index.html', '/mainpage.html', '/admin', '/style.css', '/script.js']) {
+      const resource = await visitor.request(path);
+      assert.equal(resource.status, 200, 'ressource publique disponible : ' + path);
+      if (path === '/') {
+        assert.match(resource.headers.get('content-type'), /text\/html/);
+        assert.match(resource.data.toString(), /UATM GASA/);
+      }
+    }
     let home = (await visitor.request('/api/home')).data;
     assert.equal(home.poll.activities.length, 7);
     assert.equal(home.poll.responded, false);
