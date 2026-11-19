@@ -78,7 +78,7 @@ function retryAt(error, attempts, now) {
   return now + Math.max(30000 * 2 ** attempts, Math.min(hour, delay || 0));
 }
 
-export function createPush({ db, env = process.env, send = sendNotification }) {
+export async function createPush({ db, env = process.env, send = sendNotification }) {
   const { VAPID_SUBJECT: subject, VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: privateKey } = env;
   const enabled = Boolean(subject && publicKey && privateKey);
   if (!enabled && (subject || publicKey || privateKey)) {
@@ -94,7 +94,7 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
   }
   const signedHeaders = new Map();
 
-  db.exec(
+  await db.exec(
     'CREATE TABLE IF NOT EXISTS push_subscriptions (' +
     'endpoint TEXT PRIMARY KEY, p256dh TEXT NOT NULL, auth TEXT NOT NULL, subscribedAt INTEGER NOT NULL, expiresAt INTEGER);' +
     'CREATE TABLE IF NOT EXISTS push_events (' +
@@ -111,7 +111,8 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
   const getSubscription = db.prepare('SELECT p256dh, auth FROM push_subscriptions WHERE endpoint = ?');
   const addSubscription = db.prepare(
     'INSERT INTO push_subscriptions (endpoint, p256dh, auth, subscribedAt, expiresAt) VALUES (?, ?, ?, ?, ?)' +
-    ' ON CONFLICT(endpoint) DO UPDATE SET expiresAt = excluded.expiresAt');
+    ' ON CONFLICT(endpoint) DO UPDATE SET expiresAt = excluded.expiresAt' +
+    ' WHERE push_subscriptions.p256dh = excluded.p256dh AND push_subscriptions.auth = excluded.auth');
   const removeSubscription = db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?');
   const unsubscribe = db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND p256dh = ? AND auth = ?');
   const deleteAllForSession = db.prepare('DELETE FROM push_events WHERE sessionId = ?');
@@ -120,11 +121,12 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
   const addEvent = db.prepare('INSERT INTO push_events (id, sessionId, kind, availableAt, expiresAt, payload) VALUES (?, ?, ?, ?, ?, ?)');
   const expireSubscriptions = db.prepare('DELETE FROM push_subscriptions WHERE expiresAt <= ?');
   const expireEvents = db.prepare('DELETE FROM push_events WHERE expiresAt <= ?');
+  const readyEvents = db.prepare('SELECT id FROM push_events WHERE dispatched = 0 AND availableAt <= ? AND expiresAt > ?');
   const dispatch = db.prepare(
-    'INSERT OR IGNORE INTO push_deliveries (eventId, endpoint, nextAttemptAt)' +
+    'INSERT INTO push_deliveries (eventId, endpoint, nextAttemptAt)' +
     ' SELECT e.id, s.endpoint, e.availableAt FROM push_events e JOIN push_subscriptions s ON s.subscribedAt <= e.availableAt' +
-    ' WHERE e.dispatched = 0 AND e.availableAt <= ? AND e.expiresAt > ?');
-  const markDispatched = db.prepare('UPDATE push_events SET dispatched = 1 WHERE dispatched = 0 AND availableAt <= ? AND expiresAt > ?');
+    ' WHERE e.id = ? AND e.dispatched = 0 ON CONFLICT DO NOTHING');
+  const markDispatched = db.prepare('UPDATE push_events SET dispatched = 1 WHERE id = ?');
   const readyDeliveries = db.prepare(
     'SELECT d.eventId, d.endpoint, d.attempts, s.p256dh, s.auth, e.expiresAt, e.payload FROM push_deliveries d' +
     ' JOIN push_events e ON e.id = d.eventId JOIN push_subscriptions s ON s.endpoint = d.endpoint' +
@@ -136,13 +138,14 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
     'DELETE FROM push_events WHERE dispatched = 1 AND NOT EXISTS (SELECT 1 FROM push_deliveries WHERE eventId = push_events.id)');
 
   let running = false;
+  let activeDrain = Promise.resolve();
   let stopped = false;
   let immediate;
   let timer;
 
   function mount(api) {
     api.get('/push/config', (_req, res) => res.json({ enabled, publicKey: enabled ? publicKey : null }));
-    api.post('/push/subscriptions', (req, res) => {
+    api.post('/push/subscriptions', async (req, res) => {
       if (!enabled) return res.status(503).json({ error: 'Les notifications ne sont pas configurées.' });
       const subscription = readSubscription(req.body);
       const now = Date.now();
@@ -150,72 +153,76 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
         return res.status(400).json({ error: 'Cet abonnement aux notifications est invalide ou expiré.' });
       }
       const { endpoint, p256dh, auth, expiresAt } = subscription;
-      const existing = getSubscription.get(endpoint);
+      const existing = await getSubscription.get(endpoint);
       if (existing && (existing.p256dh !== p256dh || existing.auth !== auth)) {
         return res.status(409).json({ error: 'Cet abonnement a changé. Réactive les notifications sur cet appareil.' });
       }
-      addSubscription.run(endpoint, p256dh, auth, now, expiresAt);
+      const result = await addSubscription.run(endpoint, p256dh, auth, now, expiresAt);
+      if (!result.changes) {
+        return res.status(409).json({ error: 'Cet abonnement a changé. Réactive les notifications sur cet appareil.' });
+      }
       return res.status(existing ? 200 : 201).json({ ok: true });
     });
-    api.delete('/push/subscriptions', (req, res) => {
+    api.delete('/push/subscriptions', async (req, res) => {
       const subscription = readSubscription(req.body);
       if (!subscription) return res.status(400).json({ error: 'Cet abonnement aux notifications est invalide.' });
-      unsubscribe.run(subscription.endpoint, subscription.p256dh, subscription.auth);
+      await unsubscribe.run(subscription.endpoint, subscription.p256dh, subscription.auth);
       return res.json({ ok: true });
     });
   }
 
-  function enqueue(sessionId, kind, at, message, until = at + noticeLifetime) {
+  async function enqueue(sessionId, kind, at, message, until = at + noticeLifetime) {
     const [title, body, view] = messages[message];
     const tag = randomUUID();
     const url = '/?' + new URLSearchParams({ vue: view, seance: sessionId });
-    deleteEvent.run(sessionId, kind);
-    addEvent.run(tag, sessionId, kind, at, Math.min(at + noticeLifetime, until), JSON.stringify({ title, body, url, tag }));
+    await deleteEvent.run(sessionId, kind);
+    await addEvent.run(tag, sessionId, kind, at, Math.min(at + noticeLifetime, until), JSON.stringify({ title, body, url, tag }));
   }
 
-  function planReveal(session, announcement, now) {
+  async function planReveal(session, announcement, now) {
     const at = revealTime(announcement, now);
     if (at === null) return;
-    const existing = findEvent.get(session.id, 'reveal');
+    const existing = await findEvent.get(session.id, 'reveal');
     if (existing?.availableAt === at) return;
-    enqueue(session.id, 'reveal', at, 'reveal', Math.max(at + hour, Date.parse(announcement.date)));
+    await enqueue(session.id, 'reveal', at, 'reveal', Math.max(at + hour, Date.parse(announcement.date)));
   }
 
-  function syncScheduledReveals(sessions) {
+  async function syncScheduledReveals(sessions) {
     if (!enabled) return;
     const now = Date.now();
-    for (const session of sessions) planReveal(session, availableAnnouncement(session, now), now);
+    await db.transaction(async () => {
+      for (const session of sessions) await planReveal(session, availableAnnouncement(session, now), now);
+    });
     wake();
   }
 
-  function noteSession(session, previous = null) {
+  async function noteSession(session, previous = null) {
     if (!enabled) return;
     const now = Date.now();
     const wasPublished = previous?.status === 'published';
     if (session.status !== 'published') {
-      deleteAllForSession.run(session.id);
+      await deleteAllForSession.run(session.id);
       return;
     }
     for (const [kind, property] of [['vote', 'voteOpen'], ['feedback', 'feedbackOpen']]) {
-      if (!session[property]) deleteEvent.run(session.id, kind);
-      else if (!wasPublished || !previous[property]) enqueue(session.id, kind, now, kind);
+      if (!session[property]) await deleteEvent.run(session.id, kind);
+      else if (!wasPublished || !previous[property]) await enqueue(session.id, kind, now, kind);
     }
 
     const announcement = availableAnnouncement(session, now);
     const oldAnnouncement = availableAnnouncement(previous, now);
     if (!announcement) {
-      deleteEvent.run(session.id, 'announcement');
-      deleteEvent.run(session.id, 'reveal');
+      await deleteEvent.run(session.id, 'announcement');
+      await deleteEvent.run(session.id, 'reveal');
     } else {
       const changed = announcementKey(announcement) !== announcementKey(oldAnnouncement);
       const mystery = announcement.mode === 'surprise' && (!announcement.revealAt || revealTime(announcement, now) !== null);
       if (changed) {
-        enqueue(session.id, 'announcement', now, mystery ? 'surprise' : 'announcement', Date.parse(announcement.date));
-        deleteEvent.run(session.id, 'reveal');
+        await enqueue(session.id, 'announcement', now, mystery ? 'surprise' : 'announcement', Date.parse(announcement.date));
+        await deleteEvent.run(session.id, 'reveal');
       }
-      planReveal(session, announcement, now);
+      await planReveal(session, announcement, now);
     }
-    wake();
   }
 
   function headersFor(endpoint) {
@@ -231,9 +238,9 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
 
   async function deliver(entry) {
     const { eventId, endpoint } = entry;
-    if (!deliveryStillPending.get(eventId, endpoint)) return;
+    if (stopped || !await deliveryStillPending.get(eventId, endpoint)) return;
     if (!pushEndpoint(endpoint)) {
-      removeSubscription.run(endpoint);
+      await removeSubscription.run(endpoint);
       return;
     }
     try {
@@ -245,21 +252,21 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
         headers: headersFor(endpoint),
         vapidDetails: null,
       });
-      if (!stopped) finish.run(eventId, endpoint);
+      if (!stopped) await finish.run(eventId, endpoint);
     } catch (error) {
       if (stopped) return;
       const status = error.statusCode;
       if (status === 404 || status === 410) {
-        removeSubscription.run(endpoint);
+        await removeSubscription.run(endpoint);
         return;
       }
       const attempts = entry.attempts + 1;
       const transient = status === undefined || status === 408 || status === 429 || status >= 500;
       const later = retryAt(error, entry.attempts, Date.now());
       if (transient && attempts < maximumAttempts && later < entry.expiresAt) {
-        retry.run(attempts, later, eventId, endpoint);
+        await retry.run(attempts, later, eventId, endpoint);
       } else {
-        finish.run(eventId, endpoint);
+        await finish.run(eventId, endpoint);
       }
     }
   }
@@ -269,21 +276,20 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
     running = true;
     try {
       const now = Date.now();
-      expireSubscriptions.run(now);
-      expireEvents.run(now);
-      db.exec('BEGIN');
-      try {
-        dispatch.run(now, now);
-        markDispatched.run(now, now);
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
-      const entries = readyDeliveries.all(now, now);
+      await db.transaction(async () => {
+        await expireSubscriptions.run(now);
+        await expireEvents.run(now);
+        const events = await readyEvents.all(now, now);
+        for (const event of events) {
+          await dispatch.run(event.id);
+          await markDispatched.run(event.id);
+        }
+      });
+      if (stopped) return;
+      const entries = await readyDeliveries.all(now, now);
       await Promise.allSettled(entries.map(deliver));
       if (stopped) return;
-      pruneDispatched.run();
+      await pruneDispatched.run();
       if (entries.length === 12) wake();
     } finally {
       running = false;
@@ -294,7 +300,9 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
     if (!enabled || stopped || immediate) return;
     immediate = setImmediate(() => {
       immediate = undefined;
-      drain().catch(() => console.error('Impossible de traiter la file de notifications.'));
+      if (!running && !stopped) {
+        activeDrain = drain().catch(() => console.error('Impossible de traiter la file de notifications.'));
+      }
     });
     immediate.unref();
   }
@@ -305,11 +313,12 @@ export function createPush({ db, env = process.env, send = sendNotification }) {
     wake();
   }
 
-  function stop() {
+  async function stop() {
     stopped = true;
     clearInterval(timer);
     clearImmediate(immediate);
+    await activeDrain;
   }
 
-  return { mount, noteSession, syncScheduledReveals, stop };
+  return { mount, noteSession, syncScheduledReveals, wake, stop };
 }

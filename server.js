@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase } from './database.js';
 import express from 'express';
 import ExcelJS from 'exceljs';
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
@@ -10,24 +9,27 @@ import QRCode from 'qrcode';
 import { AccountError, installAccounts } from './accounts.js';
 import { createPush } from './push.js';
 
+export async function createApplication({ database } = {}) {
 const root = fileURLToPath(new URL('.', import.meta.url));
 const dataDir = resolve(process.env.DATA_DIR || resolve(root, 'data'));
 const production = process.env.NODE_ENV === 'production';
-const publicOrigin = process.env.PUBLIC_URL ? readOrigin(process.env.PUBLIC_URL) : null;
+const configuredOrigin = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL;
+const publicOrigin = configuredOrigin ? readOrigin(configuredOrigin) : null;
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 3000);
 if (production && !publicOrigin?.startsWith('https://')) {
   throw new Error('PUBLIC_URL doit indiquer le domaine HTTPS du site en production.');
 }
+if (production && process.env.RENDER === 'true' && !process.env.DATABASE_URL && !process.env.DATA_DIR && !database) {
+  throw new Error('Configurez DATABASE_URL pour Neon, ou DATA_DIR sur un disque persistant Render.');
+}
 
-mkdirSync(dataDir, { recursive: true });
-const db = new DatabaseSync(resolve(dataDir, 'gasa.sqlite'));
-db.exec(`
-  PRAGMA foreign_keys = ON;
-  PRAGMA journal_mode = WAL;
-  PRAGMA busy_timeout = 5000;
+const db = database || await openDatabase({ dataDir });
+await db.exec(`
+  CREATE TABLE IF NOT EXISTS schema_settings (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
 
   CREATE TABLE IF NOT EXISTS activities (
+    ${db.dialect === 'postgres' ? 'sort_order BIGSERIAL,' : ''}
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -38,6 +40,7 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS sessions (
+    ${db.dialect === 'postgres' ? 'sort_order BIGSERIAL,' : ''}
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -81,12 +84,14 @@ db.exec(`
 `);
 
 function activityFromRow(row) {
-  return row ? { ...row, options: JSON.parse(row.options), archived: Boolean(row.archived) } : null;
+  if (!row) return null;
+  const { sort_order, ...activity } = row;
+  return { ...activity, options: JSON.parse(row.options), archived: Boolean(row.archived) };
 }
 
 function sessionFromRow(row) {
   if (!row) return null;
-  const { createdAt, feedbackEnabled, ...session } = row;
+  const { createdAt, feedbackEnabled, sort_order, ...session } = row;
   return {
     ...session,
     activityIds: JSON.parse(row.activityIds),
@@ -96,20 +101,20 @@ function sessionFromRow(row) {
   };
 }
 
-function activities() {
-  return db.prepare('SELECT * FROM activities ORDER BY rowid').all().map(activityFromRow);
+async function activities() {
+  return (await db.prepare('SELECT * FROM activities ORDER BY ' + db.orderColumn).all()).map(activityFromRow);
 }
 
-function findActivity(id) {
-  return activityFromRow(db.prepare('SELECT * FROM activities WHERE id = ?').get(id));
+async function findActivity(id) {
+  return activityFromRow(await db.prepare('SELECT * FROM activities WHERE id = ?').get(id));
 }
 
-function findSession(id) {
-  return sessionFromRow(db.prepare('SELECT * FROM sessions WHERE id = ?').get(id));
+async function findSession(id) {
+  return sessionFromRow(await db.prepare('SELECT * FROM sessions WHERE id = ?').get(id));
 }
 
-function writeActivity(activity) {
-  db.prepare(`
+async function writeActivity(activity) {
+  await db.prepare(`
     INSERT INTO activities (id, name, description, image, question, options, archived)
     VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET
       name=excluded.name, description=excluded.description, image=excluded.image,
@@ -118,45 +123,39 @@ function writeActivity(activity) {
     JSON.stringify(activity.options), Number(activity.archived));
 }
 
-function updateActivity(activity, previous) {
+async function updateActivity(activity, previous) {
   if (!activity.archived || previous.archived) {
-    writeActivity(activity);
+    await writeActivity(activity);
     return;
   }
 
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    writeActivity(activity);
-    db.exec(`
-      UPDATE sessions SET voteOpen = 0
-      WHERE status = 'published' AND voteOpen = 1 AND NOT EXISTS (
-        SELECT 1 FROM json_each(sessions.activityIds) AS option
-        JOIN activities ON activities.id = option.value
-        WHERE activities.archived = 0
-      )
-    `);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  await db.transaction(async () => {
+    await writeActivity(activity);
+    const sessions = await db.prepare("SELECT * FROM sessions WHERE status = 'published' AND voteOpen = 1").all();
+    const active = new Set((await activities()).filter(item => !item.archived).map(item => item.id));
+    for (const session of sessions) {
+      if (!JSON.parse(session.activityIds).some(id => active.has(id))) {
+        await db.prepare('UPDATE sessions SET voteOpen = 0 WHERE id = ?').run(session.id);
+      }
+    }
+  });
 }
 
-function writeSession(session) {
-  db.prepare(`
+async function writeSession(session) {
+  await db.prepare(`
     INSERT INTO sessions (id, title, description, status, activityIds, voteOpen, feedbackOpen,
       feedbackEnabled, announcement, createdAt)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET
       title=excluded.title, description=excluded.description, status=excluded.status,
       activityIds=excluded.activityIds, voteOpen=excluded.voteOpen, feedbackOpen=excluded.feedbackOpen,
-      feedbackEnabled=MAX(feedbackEnabled, excluded.feedbackEnabled), announcement=excluded.announcement
+      feedbackEnabled=CASE WHEN sessions.feedbackEnabled = 1 OR excluded.feedbackEnabled = 1 THEN 1 ELSE 0 END,
+      announcement=excluded.announcement
   `).run(session.id, session.title, session.description, session.status, JSON.stringify(session.activityIds),
     Number(session.voteOpen), Number(session.feedbackOpen), Number(session.feedbackOpen),
     session.announcement ? JSON.stringify(session.announcement) : null, Date.now());
 }
 
-function seed() {
-  if (db.prepare('PRAGMA user_version').get().user_version > 0) return;
+async function seed() {
   const initialActivities = [
     ['cinema', 'Cinéma', 'Une projection suivie d’un échange entre étudiants.', 'cinema.jpg',
       'Quel genre de film aimeriez-vous voir ?', ['Documentaire & innovation', 'Biopic & entrepreneuriat', 'Histoire & société']],
@@ -173,34 +172,34 @@ function seed() {
     ['culinaire', 'Foire culinaire', 'Des spécialités à découvrir et à partager.', 'culinaire.jpg',
       'Quel format aimeriez-vous pour la foire ?', ['Dégustation de plats béninois', 'Concours de cuisine étudiante', 'Ateliers de recettes en équipe']],
   ];
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    if (db.prepare('PRAGMA user_version').get().user_version === 0) {
+  await db.transaction(async () => {
+    await db.prepare("INSERT INTO schema_settings (name, value) VALUES ('seed', 0) ON CONFLICT (name) DO NOTHING").run();
+    const marker = await db.prepare("SELECT value FROM schema_settings WHERE name = 'seed'"
+      + (db.dialect === 'postgres' ? ' FOR UPDATE' : '')).get();
+    const legacySeeded = db.dialect === 'sqlite' && (await db.prepare('PRAGMA user_version').get()).user_version > 0;
+    if (marker.value === 0 && !legacySeeded) {
       for (const [id, name, description, file, question, labels] of initialActivities) {
         const options = labels.map((label, index) => ({ id: `option-${index + 1}`, label }));
-        writeActivity({ id, name, description, image: `/images/${file}`, question, options, archived: false });
+        await writeActivity({ id, name, description, image: `/images/${file}`, question, options, archived: false });
       }
-      writeSession({
+      await writeSession({
         id: 'projection-campus', title: 'Projection campus',
         description: 'Retour sur la dernière projection du campus.',
         status: 'published', activityIds: [], voteOpen: false, feedbackOpen: true, announcement: null,
       });
-      writeSession({
+      await writeSession({
         id: 'prochaine-seance', title: 'La prochaine séance',
         description: 'Choisissez une activité, puis précisez le format que vous aimeriez.',
         status: 'published', activityIds: initialActivities.map(([id]) => id),
         voteOpen: true, feedbackOpen: false, announcement: null,
       });
-      db.exec('PRAGMA user_version = 1');
     }
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+    await db.prepare("UPDATE schema_settings SET value = 1 WHERE name = 'seed'").run();
+    if (db.dialect === 'sqlite') await db.exec('PRAGMA user_version = 1');
+  });
 }
 
-seed();
+await seed();
 
 class RequestError extends Error {
   constructor(status, message) {
@@ -253,7 +252,7 @@ function readImage(value) {
   throw new RequestError(400, 'Choisissez une image du dossier /images/ ou une URL HTTPS.');
 }
 
-function readActivity(body, existing) {
+async function readActivity(body, existing) {
   const { options, name, description, image, question, archived } = { ...existing, ...body };
   requireThat(Array.isArray(options) && options.length >= 2 && options.length <= 8,
     400, 'Ajoutez entre 2 et 8 réponses au sondage de l’activité.');
@@ -269,12 +268,12 @@ function readActivity(body, existing) {
   const hadAnotherLabel = db.prepare(`
     SELECT 1 FROM votes WHERE activityId = ? AND optionId = ? AND optionLabel <> ? LIMIT 1
   `);
-  const stableChoices = existing ? choices.map(choice => {
+  const stableChoices = existing ? await Promise.all(choices.map(async choice => {
     const currentLabel = currentLabels.get(choice.id);
     const changedLabel = currentLabel !== undefined && currentLabel !== choice.label;
-    const reusedId = currentLabel === undefined && hadAnotherLabel.get(existing.id, choice.id, choice.label);
+    const reusedId = currentLabel === undefined && await hadAnotherLabel.get(existing.id, choice.id, choice.label);
     return changedLabel || reusedId ? { ...choice, id: randomUUID() } : choice;
-  }) : choices;
+  })) : choices;
   return {
     id: existing?.id || randomUUID(),
     name: readText(name, 'le nom de l’activité', 90),
@@ -295,11 +294,11 @@ function readDate(value, field) {
   return new Date(value).toISOString();
 }
 
-function readAnnouncement(announcement) {
+async function readAnnouncement(announcement) {
   if (!announcement) return null;
   const { activityId, date, location, mode, hint, revealAt } = announcement;
   requireThat(typeof activityId === 'string' && idPattern.test(activityId)
-    && findActivity(activityId), 400, 'Choisissez une activité existante pour l’annonce.');
+    && await findActivity(activityId), 400, 'Choisissez une activité existante pour l’annonce.');
   requireThat(['normal', 'surprise'].includes(mode), 400, 'Choisissez le mode de l’annonce.');
   return {
     activityId,
@@ -311,18 +310,21 @@ function readAnnouncement(announcement) {
   };
 }
 
-function readSession(body, existing) {
+async function readSession(body, existing) {
   const { status, activityIds, title, description, voteOpen, feedbackOpen, announcement } = {
     status: 'draft', activityIds: [], ...existing, ...body,
   };
   requireThat(['draft', 'published', 'archived'].includes(status), 400, 'Statut de séance invalide.');
   requireThat(Array.isArray(activityIds) && activityIds.length <= 30
-    && activityIds.every(id => typeof id === 'string' && idPattern.test(id) && findActivity(id)),
+    && activityIds.every(id => typeof id === 'string' && idPattern.test(id)),
     400, 'Choisissez des activités existantes.');
+  const available = new Map((await activities()).map(activity => [activity.id, activity]));
+  const selected = activityIds.map(id => available.get(id));
+  requireThat(selected.every(Boolean), 400, 'Choisissez des activités existantes.');
   const open = readBoolean(voteOpen, 'Le vote', false);
   const ids = [...new Set(activityIds)];
   if (open && status === 'published') {
-    requireThat(ids.some(id => !findActivity(id).archived),
+    requireThat(selected.some(activity => !activity.archived),
       400, 'Ajoutez au moins une activité active pour ouvrir le vote.');
   }
   return {
@@ -333,7 +335,7 @@ function readSession(body, existing) {
     activityIds: ids,
     voteOpen: open,
     feedbackOpen: readBoolean(feedbackOpen, 'Les avis', false),
-    announcement: readAnnouncement(announcement),
+    announcement: await readAnnouncement(announcement),
   };
 }
 
@@ -391,95 +393,111 @@ function legacyParticipant(req) {
   return token ? digest(token).toString('hex') : null;
 }
 
-function migrateBrowserResponses(req, res, student) {
+async function migrateBrowserResponses(req, res, student) {
   const previous = legacyParticipant(req);
   if (!previous) return;
-  db.exec('BEGIN IMMEDIATE');
-  try {
+  await mutate(async () => {
     for (const table of ['votes', 'feedback', 'guesses']) {
-      db.prepare('UPDATE OR IGNORE ' + table + ' SET participant = ? WHERE participant = ?')
-        .run('student:' + student.id, previous);
+      await db.prepare(`UPDATE ${table} AS legacy SET participant = ? WHERE participant = ? AND NOT EXISTS (
+        SELECT 1 FROM ${table} AS current_response
+        WHERE current_response.sessionId = legacy.sessionId AND current_response.participant = ?
+      )`).run('student:' + student.id, previous, 'student:' + student.id);
     }
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+  });
   res.clearCookie('gasa_participant', { httpOnly: true, sameSite: 'lax', secure: production || req.secure, path: '/' });
 }
 
 const auth = await installAccounts({ api, db, production, onStudentAuthenticated: migrateBrowserResponses });
-const push = createPush({ db });
+const push = await createPush({ db });
 push.mount(api);
-push.syncScheduledReveals(db.prepare("SELECT * FROM sessions WHERE status = 'published'").all().map(sessionFromRow));
+await push.syncScheduledReveals((await db.prepare("SELECT * FROM sessions WHERE status = 'published'").all()).map(sessionFromRow));
 api.use('/admin', auth.requireAdmin('read'));
 
 function requireArchivePermission(req) {
   requireThat(req.admin.capabilities.includes('archive'), 403, 'Cette action est réservée au responsable du comité.');
 }
 
-function saveSessionAndNotice(session, previous = null) {
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    writeSession(session);
-    push.noteSession(session, previous);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+// Serialize application edits with responses, including across PostgreSQL connections.
+// This keeps a closed poll from accepting a response while an admin edit commits.
+async function mutate(work) {
+  return db.transaction(async () => {
+    await db.prepare("SELECT value FROM schema_settings WHERE name = 'seed'"
+      + (db.dialect === 'postgres' ? ' FOR UPDATE' : '')).get();
+    return work();
+  });
 }
 
-api.get('/admin/dashboard', (req, res) => {
-  const sessions = db.prepare('SELECT * FROM sessions ORDER BY createdAt DESC, rowid DESC')
-    .all().map(sessionFromRow);
-  res.json({ activities: activities(), sessions, publicUrl: publicOrigin || requestOrigin(req) });
+async function saveSessionAndNotice(session, previous = null) {
+  await db.transaction(async () => {
+    await writeSession(session);
+    await push.noteSession(session, previous);
+  });
+}
+
+api.get('/admin/dashboard', async (req, res) => {
+  const sessions = (await db.prepare('SELECT * FROM sessions ORDER BY createdAt DESC, ' + db.orderColumn + ' DESC')
+    .all()).map(sessionFromRow);
+  res.json({ activities: await activities(), sessions, publicUrl: publicOrigin || requestOrigin(req) });
 });
 
-api.post('/admin/activities', auth.requireAdmin('edit'), (req, res) => {
-  const activity = readActivity(req.body);
-  if (activity.archived) requireArchivePermission(req);
-  writeActivity(activity);
+api.post('/admin/activities', auth.requireAdmin('edit'), async (req, res) => {
+  const activity = await mutate(async () => {
+    const value = await readActivity(req.body);
+    if (value.archived) requireArchivePermission(req);
+    await writeActivity(value);
+    return value;
+  });
   res.status(201).json(activity);
 });
 
-api.put('/admin/activities/:id', auth.requireAdmin('edit'), (req, res) => {
-  const existing = findActivity(req.params.id);
-  requireThat(existing, 404, 'Activité introuvable.');
-  const activity = readActivity(req.body, existing);
-  if (activity.archived || existing.archived) requireArchivePermission(req);
-  updateActivity(activity, existing);
+api.put('/admin/activities/:id', auth.requireAdmin('edit'), async (req, res) => {
+  const activity = await mutate(async () => {
+    const existing = await findActivity(req.params.id);
+    requireThat(existing, 404, 'Activité introuvable.');
+    const value = await readActivity(req.body, existing);
+    if (value.archived || existing.archived) requireArchivePermission(req);
+    await updateActivity(value, existing);
+    return value;
+  });
   res.json(activity);
 });
 
-api.post('/admin/sessions', auth.requireAdmin('edit'), (req, res) => {
-  const session = readSession(req.body);
-  if (session.status === 'archived') requireArchivePermission(req);
-  saveSessionAndNotice(session);
+api.post('/admin/sessions', auth.requireAdmin('edit'), async (req, res) => {
+  const session = await mutate(async () => {
+    const value = await readSession(req.body);
+    if (value.status === 'archived') requireArchivePermission(req);
+    await saveSessionAndNotice(value);
+    return value;
+  });
+  push.wake();
   res.status(201).json(session);
 });
 
-function sessionOr404(id) {
-  const session = findSession(id);
+async function sessionOr404(id) {
+  const session = await findSession(id);
   requireThat(session, 404, 'Séance introuvable.');
   return session;
 }
 
-api.put('/admin/sessions/:id', auth.requireAdmin('edit'), (req, res) => {
-  const previous = sessionOr404(req.params.id);
-  const session = readSession(req.body, previous);
-  if (session.status === 'archived' || previous.status === 'archived'
-    || (previous.status === 'published' && session.status === 'draft')) requireArchivePermission(req);
-  saveSessionAndNotice(session, previous);
+api.put('/admin/sessions/:id', auth.requireAdmin('edit'), async (req, res) => {
+  const session = await mutate(async () => {
+    const previous = await sessionOr404(req.params.id);
+    const value = await readSession(req.body, previous);
+    if (value.status === 'archived' || previous.status === 'archived'
+      || (previous.status === 'published' && value.status === 'draft')) requireArchivePermission(req);
+    await saveSessionAndNotice(value, previous);
+    return value;
+  });
+  push.wake();
   res.json(session);
 });
 
-function listedActivities(session) {
-  return session.activityIds.map(findActivity).filter(activity => activity && !activity.archived);
+async function listedActivities(session) {
+  return (await Promise.all(session.activityIds.map(findActivity))).filter(activity => activity && !activity.archived);
 }
 
-function allowedGuesses() {
-  return activities().map(({ id, name }) => ({ id, name }))
+async function allowedGuesses() {
+  return (await activities()).map(({ id, name }) => ({ id, name }))
     .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 }
 
@@ -488,25 +506,28 @@ function announcementIsRevealed(announcement) {
     || Boolean(announcement.revealAt && Date.parse(announcement.revealAt) <= Date.now());
 }
 
-function hasResponded(table, sessionId, voter) {
+async function hasResponded(table, sessionId, voter) {
   if (!voter) return false;
   const statements = {
     votes: 'SELECT 1 FROM votes WHERE sessionId = ? AND participant = ?',
     feedback: 'SELECT 1 FROM feedback WHERE sessionId = ? AND participant = ?',
     guesses: 'SELECT 1 FROM guesses WHERE sessionId = ? AND participant = ?',
   };
-  return Boolean(db.prepare(statements[table]).get(sessionId, voter));
+  return Boolean(await db.prepare(statements[table]).get(sessionId, voter));
 }
 
-api.get('/home', (req, res) => {
+api.get('/home', async (req, res) => {
   const sessionId = req.query.session;
   const scoped = sessionId !== undefined;
   requireThat(!scoped || (typeof sessionId === 'string' && idPattern.test(sessionId)), 400, 'Séance invalide.');
   const rows = scoped
-    ? db.prepare("SELECT * FROM sessions WHERE status = 'published' AND id = ?").all(sessionId)
-    : db.prepare("SELECT * FROM sessions WHERE status = 'published' ORDER BY createdAt DESC, rowid DESC").all();
+    ? await db.prepare("SELECT * FROM sessions WHERE status = 'published' AND id = ?").all(sessionId)
+    : await db.prepare("SELECT * FROM sessions WHERE status = 'published' ORDER BY createdAt DESC, " + db.orderColumn + ' DESC').all();
   const sessions = rows.map(sessionFromRow);
-  const vote = sessions.find(session => session.voteOpen && listedActivities(session).length > 0)
+  const available = new Map((await activities()).map(activity => [activity.id, activity]));
+  const activeBySession = new Map(sessions.map(session => [session.id,
+    session.activityIds.map(id => available.get(id)).filter(activity => activity && !activity.archived)]));
+  const vote = sessions.find(session => session.voteOpen && activeBySession.get(session.id).length > 0)
     || sessions.find(session => session.activityIds.length > 0);
   const feedbackRows = rows.filter(row => row.feedbackEnabled);
   const feedback = sessionFromRow(feedbackRows.find(row => row.feedbackOpen) || feedbackRows[0]);
@@ -516,95 +537,101 @@ api.get('/home', (req, res) => {
   const event = scoped ? announced[0] : announced
     .filter(session => Date.parse(session.announcement.date) >= now)
     .sort((first, second) => Date.parse(first.announcement.date) - Date.parse(second.announcement.date))[0];
-  const student = auth.student(req, res);
+  const student = await auth.student(req, res);
   const voter = student ? 'student:' + student.id : null;
   let publicAnnouncement = null;
   if (event) {
     const announcement = event.announcement;
     const revealed = announcementIsRevealed(announcement);
-    const activity = revealed ? findActivity(announcement.activityId) : null;
+    const activity = revealed ? await findActivity(announcement.activityId) : null;
     publicAnnouncement = {
       id: event.id, title: revealed ? event.title : 'Activité mystère', date: announcement.date,
       location: announcement.location, mode: announcement.mode, revealed, hint: announcement.hint,
       revealAt: announcement.revealAt,
       activity: activity ? { id: activity.id, name: activity.name, description: activity.description, image: activity.image } : null,
-      choices: revealed ? [] : allowedGuesses(),
-      responded: hasResponded('guesses', event.id, voter),
+      choices: revealed ? [] : await allowedGuesses(),
+      responded: await hasResponded('guesses', event.id, voter),
     };
   }
-  const pollActivities = vote ? listedActivities(vote) : [];
+  const pollActivities = vote ? activeBySession.get(vote.id) : [];
   const voteIsMystery = vote?.announcement && !announcementIsRevealed(vote.announcement);
   const feedbackIsMystery = feedback?.announcement && !announcementIsRevealed(feedback.announcement);
   res.json({
     poll: vote ? {
       id: vote.id, title: voteIsMystery ? 'Activité mystère' : vote.title,
       description: voteIsMystery ? '' : vote.description, open: vote.voteOpen && pollActivities.length > 0,
-      activities: pollActivities, responded: hasResponded('votes', vote.id, voter),
+      activities: pollActivities, responded: await hasResponded('votes', vote.id, voter),
     } : null,
     feedback: feedback ? {
       id: feedback.id, title: feedbackIsMystery ? 'Activité mystère' : feedback.title, open: feedback.feedbackOpen,
-      responded: hasResponded('feedback', feedback.id, voter),
+      responded: await hasResponded('feedback', feedback.id, voter),
     } : null,
     announcement: publicAnnouncement,
   });
 });
 
-function publishedSession(id) {
-  const session = sessionOr404(id);
+async function publishedSession(id) {
+  const session = await sessionOr404(id);
   requireThat(session.status === 'published', 404, 'Cette séance n’est pas disponible.');
   return session;
 }
 
-api.post('/sessions/:id/vote', auth.requireStudent, (req, res) => {
-  const session = publishedSession(req.params.id);
+api.post('/sessions/:id/vote', auth.requireStudent, async (req, res) => {
+  await mutate(async () => {
+  const session = await publishedSession(req.params.id);
   requireThat(session.voteOpen, 409, 'Le vote est fermé.');
-  const activity = listedActivities(session).find(item => item.id === req.body?.activityId);
+  const activity = (await listedActivities(session)).find(item => item.id === req.body?.activityId);
   const option = activity?.options.find(item => item.id === req.body?.optionId);
   requireThat(option, 400, 'Choisissez une activité et une réponse valides.');
-  const result = db.prepare(`
+  const result = await db.prepare(`
     INSERT INTO votes (sessionId, participant, activityId, optionId, optionLabel)
     VALUES (?, ?, ?, ?, ?) ON CONFLICT (sessionId, participant) DO NOTHING
   `).run(session.id, 'student:' + req.student.id, activity.id, option.id, option.label);
   requireThat(result.changes > 0, 409, 'Votre vote a déjà été enregistré.');
+  });
   res.status(201).json({ ok: true });
 });
 
-api.post('/sessions/:id/feedback', auth.requireStudent, (req, res) => {
-  const session = publishedSession(req.params.id);
+api.post('/sessions/:id/feedback', auth.requireStudent, async (req, res) => {
+  await mutate(async () => {
+  const session = await publishedSession(req.params.id);
   requireThat(session.feedbackOpen, 409, 'La collecte des avis est fermée.');
   const rating = req.body?.rating;
   const comment = readText(req.body?.comment, 'le commentaire', 1200, false);
   requireThat(Number.isInteger(rating) && rating >= 1 && rating <= 5, 400, 'Choisissez une note de 1 à 5.');
-  const result = db.prepare(`
+  const result = await db.prepare(`
     INSERT INTO feedback (id, sessionId, participant, rating, comment, createdAt)
     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, participant) DO NOTHING
   `).run(randomUUID(), session.id, 'student:' + req.student.id, rating, comment, new Date().toISOString());
   requireThat(result.changes > 0, 409, 'Votre avis a déjà été enregistré.');
+  });
   res.status(201).json({ ok: true });
 });
 
-api.post('/sessions/:id/guess', auth.requireStudent, (req, res) => {
-  const session = publishedSession(req.params.id);
+api.post('/sessions/:id/guess', auth.requireStudent, async (req, res) => {
+  await mutate(async () => {
+  const session = await publishedSession(req.params.id);
   requireThat(session.announcement?.mode === 'surprise' && !announcementIsRevealed(session.announcement),
     409, 'Les propositions sont fermées.');
   const activityId = req.body?.activityId;
-  requireThat(allowedGuesses().some(activity => activity.id === activityId), 400, 'Choisissez une activité proposée.');
-  const result = db.prepare(`
+  requireThat((await allowedGuesses()).some(activity => activity.id === activityId), 400, 'Choisissez une activité proposée.');
+  const result = await db.prepare(`
     INSERT INTO guesses (sessionId, participant, activityId)
     VALUES (?, ?, ?) ON CONFLICT (sessionId, participant) DO NOTHING
   `).run(session.id, 'student:' + req.student.id, activityId);
   requireThat(result.changes > 0, 409, 'Votre proposition a déjà été enregistrée.');
+  });
   res.status(201).json({ ok: true });
 });
 
-function resultsFor(session) {
-  const grouped = db.prepare(`
+async function resultsFor(session) {
+  const grouped = await db.prepare(`
     SELECT activityId, optionId, MIN(optionLabel) AS optionLabel, COUNT(*) AS count FROM votes
     WHERE sessionId = ? GROUP BY activityId, optionId
   `).all(session.id);
   const ids = new Set([...session.activityIds, ...grouped.map(vote => vote.activityId)]);
-  const votes = [...ids].map(activityId => {
-    const activity = findActivity(activityId);
+  const votes = await Promise.all([...ids].map(async activityId => {
+    const activity = await findActivity(activityId);
     const options = new Map(activity.options.map(({ id, label }) => [id, { id, label, count: 0 }]));
     let count = 0;
     for (const vote of grouped.filter(row => row.activityId === activityId)) {
@@ -613,29 +640,29 @@ function resultsFor(session) {
       count += vote.count;
     }
     return { activityId, name: activity.name, count, options: [...options.values()] };
-  });
-  const feedback = db.prepare(`
+  }));
+  const feedback = (await db.prepare(`
     SELECT id, rating, comment, createdAt, hidden FROM feedback WHERE sessionId = ? ORDER BY createdAt DESC
-  `).all(session.id).map(item => ({ ...item, hidden: Boolean(item.hidden) }));
-  const guesses = db.prepare('SELECT COUNT(*) AS count FROM guesses WHERE sessionId = ?').get(session.id).count;
+  `).all(session.id)).map(item => ({ ...item, hidden: Boolean(item.hidden) }));
+  const guesses = (await db.prepare('SELECT COUNT(*) AS count FROM guesses WHERE sessionId = ?').get(session.id)).count;
   return { votes, feedback, guesses };
 }
 
-api.get('/admin/sessions/:id/results', (req, res) => {
-  res.json(resultsFor(sessionOr404(req.params.id)));
+api.get('/admin/sessions/:id/results', async (req, res) => {
+  res.json(await resultsFor(await sessionOr404(req.params.id)));
 });
 
-api.put('/admin/sessions/:id/feedback/:feedbackId', auth.requireAdmin('moderate'), (req, res) => {
+api.put('/admin/sessions/:id/feedback/:feedbackId', auth.requireAdmin('moderate'), async (req, res) => {
   const hidden = readBoolean(req.body?.hidden, 'La visibilité', undefined);
   requireThat(hidden !== undefined, 400, 'Choisissez de masquer ou de rétablir l’avis.');
-  const result = db.prepare('UPDATE feedback SET hidden = ? WHERE sessionId = ? AND id = ?')
+  const result = await db.prepare('UPDATE feedback SET hidden = ? WHERE sessionId = ? AND id = ?')
     .run(Number(hidden), req.params.id, req.params.feedbackId);
   requireThat(result.changes > 0, 404, 'Avis introuvable.');
   res.json({ hidden });
 });
 
 api.get('/admin/sessions/:id/qr/:kind', auth.requireAdmin('share'), async (req, res) => {
-  const session = sessionOr404(req.params.id);
+  const session = await sessionOr404(req.params.id);
   const { kind } = req.params;
   requireThat(['vote', 'avis', 'annonce'].includes(kind), 404, 'Parcours introuvable.');
   let baseUrl = publicOrigin || requestOrigin(req);
@@ -672,7 +699,7 @@ function exportSheet(workbook, name, columns, rows) {
   return sheet;
 }
 
-function summaries(session, results) {
+async function summaries(session, results) {
   const total = results.votes.reduce((sum, item) => sum + item.count, 0);
   const rows = [
     ['Séance', session.title],
@@ -686,7 +713,7 @@ function summaries(session, results) {
   }
   if (session.announcement) {
     const { activityId, date, location } = session.announcement;
-    rows.push(['Activité retenue', findActivity(activityId)?.name || ''], ['Date', timeFormat.format(new Date(date))],
+    rows.push(['Activité retenue', (await findActivity(activityId))?.name || ''], ['Date', timeFormat.format(new Date(date))],
       ['Lieu', location]);
   }
   return rows;
@@ -695,7 +722,7 @@ function summaries(session, results) {
 async function exportExcel(session, results) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'UATM GASA';
-  exportSheet(workbook, 'Synthèse', [['Indicateur', 29], ['Valeur', 50]], summaries(session, results));
+  exportSheet(workbook, 'Synthèse', [['Indicateur', 29], ['Valeur', 50]], await summaries(session, results));
   exportSheet(workbook, 'Activités', [['Activité', 34], ['Votes', 14]],
     results.votes.map(activity => [activity.name, activity.count]));
   exportSheet(workbook, 'Réponses', [['Activité', 34], ['Réponse', 56], ['Votes', 14]],
@@ -709,10 +736,10 @@ function reportText(text, heading) {
   return new Paragraph({ text, heading, spacing: { after: 110 } });
 }
 
-function exportWord(session, results) {
+async function exportWord(session, results) {
   const paragraphs = [reportText(session.title, HeadingLevel.TITLE), reportText('Bilan de la vie étudiante · UATM GASA')];
   if (session.description) paragraphs.push(reportText(session.description));
-  for (const [label, value] of summaries(session, results).slice(1)) {
+  for (const [label, value] of (await summaries(session, results)).slice(1)) {
     paragraphs.push(reportText(`${label} : ${value}`));
   }
   paragraphs.push(reportText('Votes par activité', HeadingLevel.HEADING_1));
@@ -734,10 +761,10 @@ function exportWord(session, results) {
 }
 
 api.get('/admin/sessions/:id/export/:format', auth.requireAdmin('export'), async (req, res) => {
-  const session = sessionOr404(req.params.id);
+  const session = await sessionOr404(req.params.id);
   const { format } = req.params;
   requireThat(['xlsx', 'docx'].includes(format), 404, 'Format d’export introuvable.');
-  const results = resultsFor(session);
+  const results = await resultsFor(session);
   const report = format === 'xlsx' ? await exportExcel(session, results) : await exportWord(session, results);
   res.attachment(`gasa-bilan-${session.id}.${format}`).send(Buffer.from(report));
 });
@@ -746,7 +773,14 @@ api.use((_req, res) => {
   res.status(404).json({ error: 'Ressource introuvable.' });
 });
 
-app.get('/healthz', (_req, res) => res.json({ ok: true }));
+app.get('/healthz', async (_req, res) => {
+  try {
+    await db.prepare('SELECT 1').get();
+    res.json({ ok: true });
+  } catch {
+    res.status(503).json({ ok: false });
+  }
+});
 app.get('/service-worker.js', (_req, res) => {
   res.set('Cache-Control', 'no-cache').sendFile(resolve(root, 'service-worker.js'));
 });
@@ -767,10 +801,32 @@ app.use((error, req, res, next) => {
   if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Le contenu est trop volumineux.' });
   if (error.type === 'entity.parse.failed') return res.status(400).json({ error: 'Le formulaire est invalide.' });
   if (error.status === 404) return res.status(404).json({ error: 'Ressource introuvable.' });
-  console.error(`${req.method} ${req.path}`, error);
+  console.error(`${req.method} ${req.path}`, error.code || error.name || 'Erreur serveur');
   return res.status(500).json({ error: 'Une erreur est survenue. Réessayez dans un instant.' });
 });
 
 const server = app.listen(port, host, () => {
   console.log(`GASA Activités · http://${host}:${server.address().port}`);
 });
+let closing;
+function close() {
+  return closing ||= (async () => {
+    await new Promise((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
+    auth.close();
+    await push.stop();
+    await db.close();
+  })();
+}
+return { app, server, db, close };
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const application = await createApplication();
+  const shutdown = () => {
+    const deadline = setTimeout(() => process.exit(1), 20_000);
+    deadline.unref();
+    application.close().then(() => clearTimeout(deadline), () => process.exit(1));
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+}
