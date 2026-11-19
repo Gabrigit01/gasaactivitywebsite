@@ -1,0 +1,30 @@
+MIGRATION DU BACKEND GASA VERS NEON POSTGRESQL
+
+Contenu a copier a la racine du projet :
+- server.js
+- accounts.js
+- push.js
+- config/database.js (conserver le dossier config)
+
+AVANT DE REMPLACER : faites une copie de securite de vos anciens fichiers.
+
+Prerequis : npm install pg (deja execute dans votre terminal selon le retour fourni).
+
+Dans le fichier .env a la racine, definir :
+DATABASE_URL="URL_DE_CONNEXION_NEON"
+
+Le script npm start existant charge deja .env avec Node.js.
+
+Demarrage local : npm start
+
+Le serveur cree les tables manquantes avec CREATE TABLE IF NOT EXISTS.
+Il insere les activites et seances de demonstration uniquement si les tables
+activities ET sessions sont toutes les deux vides.
+
+IMPORTANT : les donnees existantes du fichier SQLite gasa.sqlite ne sont pas
+transferees automatiquement vers Neon. Prevoir une exportation/importation si
+vous devez conserver des donnees deja saisies.
+
+Les fichiers ont ete controles avec node --check (syntaxe JavaScript).
+La connexion fonctionnelle a Neon devra etre verifiee dans votre environnement
+local avec votre propre DATABASE_URL.
