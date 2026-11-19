@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './database.js';
+import { migratePostgresSchema } from './schema-migration.js';
 import express from 'express';
 import ExcelJS from 'exceljs';
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
@@ -25,6 +26,7 @@ if (production && process.env.RENDER === 'true' && !process.env.DATABASE_URL && 
 }
 
 const db = database || await openDatabase({ dataDir });
+await migratePostgresSchema(db);
 await db.exec(`
   CREATE TABLE IF NOT EXISTS schema_settings (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
 
@@ -177,7 +179,9 @@ async function seed() {
     const marker = await db.prepare("SELECT value FROM schema_settings WHERE name = 'seed'"
       + (db.dialect === 'postgres' ? ' FOR UPDATE' : '')).get();
     const legacySeeded = db.dialect === 'sqlite' && (await db.prepare('PRAGMA user_version').get()).user_version > 0;
-    if (marker.value === 0 && !legacySeeded) {
+    const existingData = await db.prepare('SELECT 1 FROM activities LIMIT 1').get()
+      || await db.prepare('SELECT 1 FROM sessions LIMIT 1').get();
+    if (marker.value === 0 && !legacySeeded && !existingData) {
       for (const [id, name, description, file, question, labels] of initialActivities) {
         const options = labels.map((label, index) => ({ id: `option-${index + 1}`, label }));
         await writeActivity({ id, name, description, image: `/images/${file}`, question, options, archived: false });

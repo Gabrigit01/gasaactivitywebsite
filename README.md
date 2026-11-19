@@ -72,6 +72,8 @@ Le site est un **Web Service** Node.js public. Neon fournit la base **PostgreSQL
 
 Avec Neon, les données sont conservées dans PostgreSQL : aucun disque persistant Render ni `DATA_DIR` n’est nécessaire. La base est initialisée au premier démarrage. **Les données SQLite de l’ordinateur ne sont pas transférées automatiquement vers Neon.**
 
+Les anciennes bases PostgreSQL utilisant des noms de colonnes en minuscules ou avec des underscores sont migrées automatiquement au démarrage, dans une transaction. Les données, clés étrangères et index sont conservés. Les activités et séances de démonstration ne sont ajoutées que lorsque ces deux tables sont vides ; une base importée contenant déjà des activités ou des séances n’est pas réinitialisée. En cas de noms de colonnes ambigus, le démarrage s’arrête avec un diagnostic et la migration est annulée.
+
 L’offre Render gratuite convient à une prévisualisation. Elle met le serveur en veille après 15 minutes sans trafic : une notification programmée pendant cette veille ne pourra être traitée qu’au réveil du serveur. Une instance payante évite cette veille pour le fonctionnement continu du site. [Documentation Render : Web Services](https://render.com/docs/web-services), [limites de l’offre gratuite](https://render.com/docs/free).
 
 ### Autre hébergement ou SQLite persistante
