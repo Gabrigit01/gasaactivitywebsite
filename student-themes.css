@@ -218,32 +218,6 @@
 :root[data-student-theme="light"] .button-outline:hover { background: #eee8db; }
 :root[data-student-theme="light"] .form-error { color: #862a21; }
 :root[data-student-theme="light"] .event-copy .event-hint { color: #62471f; background: #f8eacb; }
-/* Halo lumineux au survol sur le fond du header */
-.site-header {
-  background-image: radial-gradient(
-    260px circle at var(--header-x, -300px) var(--header-y, 50%),
-    rgba(245, 158, 11, 0.16),
-    transparent 70%
-  );
-  transition: border-color 0.3s ease;
-}
-.site-header:hover {
-  border-bottom-color: rgba(245, 158, 11, 0.38);
-}
-
-/* Activation visuelle de setupParallax sur #accueil-classique */
-.campus-cover-art {
-  overflow: hidden;
-}
-.campus-cover-art img {
-  transform: translate3d(var(--image-x, 0px), var(--image-y, 0px), 0) scale(1.06);
-  will-change: transform;
-}
-.campus-cover-content {
-  translate: var(--copy-x, 0px) var(--copy-y, 0px);
-  will-change: translate;
-}
-
 
 @media (max-width: 1040px) {
   :root:is([data-student-theme="light"], [data-student-theme="dark"]) .site-nav a { font-size: .8rem; padding-inline: 8px; }
