@@ -492,7 +492,7 @@ function setupParallax(hero) {
   let visible = false;
   let point = null;
   let frame = 0;
-  const canMove = () => visible && finePointer.matches && !reducedMotion.matches;
+  const canMove = () => visible && !reducedMotion.matches;
 
   function requestFrame() {
     if (!frame && canMove()) frame = requestAnimationFrame(renderFrame);
