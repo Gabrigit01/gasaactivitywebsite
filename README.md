@@ -1,6 +1,6 @@
 # UATM GASA · Vie étudiante
 
-Le site étudiant et l’espace comité partagent une base SQLite. L’application est prévue pour Node.js 24 LTS ou pour le conteneur fourni.
+Le site étudiant et l’espace comité partagent une base de données. Avec `DATABASE_URL`, l’application utilise PostgreSQL, notamment Neon. Sans cette variable, les essais locaux utilisent SQLite dans `data/gasa.sqlite`. L’application est prévue pour Node.js 24 LTS ou pour le conteneur fourni.
 
 ## Essai local
 
@@ -45,11 +45,42 @@ Les étudiants peuvent activer ou désactiver les notifications sur chaque appar
 
 ## Déploiement
 
-1. Utiliser un domaine **HTTPS** et renseigner son origine dans `PUBLIC_URL` (par exemple `https://activites.exemple.bj`).
-2. Activer `NODE_ENV=production`, renseigner les six paramètres `ADMIN_*_USERNAME` et `ADMIN_*_PASSWORD` et les trois paramètres VAPID pour les notifications. Utiliser le gestionnaire de secrets de l’hébergeur.
-3. Lancer une instance Node avec `npm ci --omit=dev` et `npm start`, ou construire l’image Docker. Monter un volume persistant à l’emplacement défini par `DATA_DIR`. Le volume doit être accessible en écriture par l’utilisateur de l’application.
-4. Derrière un seul proxy de confiance qui termine HTTPS, renseigner `TRUST_PROXY=1` et transmettre les bons en-têtes de protocole et d’hôte. L’URL de vérification interne est `/healthz`.
-5. Prévoir une sauvegarde SQLite régulière, par le mécanisme de sauvegarde de l’hébergeur ou après l’arrêt de l’application. Conserver aussi les secrets de production et les clés VAPID.
+### Render avec Neon
+
+Le site est un **Web Service** Node.js public. Neon fournit la base **PostgreSQL** externe : aucun service Postgres supplémentaire, Private Service ou Background Worker n’est nécessaire dans Render pour cette configuration.
+
+1. Dans Neon, ouvrir le projet et copier sa chaîne de connexion PostgreSQL depuis **Connect**. Conserver les options SSL de cette chaîne. Tout mot de passe déjà partagé doit être remplacé avant la mise en ligne.
+2. Mettre la version testée du projet sur GitHub. Dans Render, choisir **New → Web Service**, connecter GitHub et sélectionner le dépôt et la branche `main`.
+3. Choisir **Node**, laisser **Root Directory** vide, saisir `npm ci --omit=dev` dans **Build Command** et `npm start` dans **Start Command**. Définir le **Health Check Path** à `/healthz`.
+4. Dans **Environment**, ajouter les variables suivantes, une clé et une valeur par champ. Saisir les secrets directement dans Render, sans les publier dans GitHub.
+
+   | Variable | Valeur |
+   | --- | --- |
+   | `NODE_VERSION` | `24` |
+   | `NODE_ENV` | `production` |
+   | `HOST` | `0.0.0.0` |
+   | `TRUST_PROXY` | `1` |
+   | `DATABASE_URL` | Chaîne de connexion Neon, avec son nouveau mot de passe |
+   | `ADMIN_OWNER_USERNAME` / `ADMIN_OWNER_PASSWORD` | Identifiant et mot de passe du responsable |
+   | `ADMIN_ORGANIZER_USERNAME` / `ADMIN_ORGANIZER_PASSWORD` | Identifiant et mot de passe de l’organisateur |
+   | `ADMIN_VIEWER_USERNAME` / `ADMIN_VIEWER_PASSWORD` | Identifiant et mot de passe du lecteur |
+   | `VAPID_SUBJECT` | `mailto:` suivi de l’adresse de contact réelle |
+   | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Les deux clés de notification générées ensemble |
+
+5. Laisser Render fournir `PORT`. L’application utilise automatiquement `RENDER_EXTERNAL_URL` pour son adresse HTTPS. Lors de l’ajout d’un domaine personnalisé, définir `PUBLIC_URL` à son origine HTTPS exacte, sans chemin.
+6. Déployer, attendre l’état **Live**, puis ouvrir le site et `/healthz`. Tester l’inscription étudiante, un vote, un avis et les trois accès du comité. Vérifier aussi que les données et les connexions restent présentes après un redéploiement.
+
+Avec Neon, les données sont conservées dans PostgreSQL : aucun disque persistant Render ni `DATA_DIR` n’est nécessaire. La base est initialisée au premier démarrage. **Les données SQLite de l’ordinateur ne sont pas transférées automatiquement vers Neon.**
+
+Les anciennes bases PostgreSQL utilisant des noms de colonnes en minuscules ou avec des underscores sont migrées automatiquement au démarrage, dans une transaction. Les données, clés étrangères et index sont conservés. Les activités et séances de démonstration ne sont ajoutées que lorsque ces deux tables sont vides ; une base importée contenant déjà des activités ou des séances n’est pas réinitialisée. En cas de noms de colonnes ambigus, le démarrage s’arrête avec un diagnostic et la migration est annulée.
+
+L’offre Render gratuite convient à une prévisualisation. Elle met le serveur en veille après 15 minutes sans trafic : une notification programmée pendant cette veille ne pourra être traitée qu’au réveil du serveur. Une instance payante évite cette veille pour le fonctionnement continu du site. [Documentation Render : Web Services](https://render.com/docs/web-services), [limites de l’offre gratuite](https://render.com/docs/free).
+
+### Autre hébergement ou SQLite persistante
+
+Utiliser un domaine HTTPS et renseigner son origine dans `PUBLIC_URL`. Activer `NODE_ENV=production`, configurer les trois comptes administrateurs et les notifications, puis lancer `npm ci --omit=dev` et `npm start`, ou construire l’image Docker. Derrière un seul proxy de confiance qui termine HTTPS, renseigner `TRUST_PROXY=1`. L’URL de vérification interne est `/healthz`.
+
+Pour PostgreSQL, renseigner `DATABASE_URL` et prévoir les sauvegardes auprès du fournisseur de base. Pour SQLite, laisser `DATABASE_URL` vide et monter un volume persistant accessible en écriture à l’emplacement défini par `DATA_DIR`. Prévoir une sauvegarde SQLite régulière, par le mécanisme de l’hébergeur ou après l’arrêt de l’application. Conserver les secrets de production et la même paire de clés VAPID à chaque redéploiement.
 
 Exemple de lancement du conteneur derrière un proxy local :
 
@@ -59,7 +90,7 @@ docker volume create gasa-data
 docker run --env-file .env.production --mount source=gasa-data,target=/app/data -p 127.0.0.1:3000:3000 gasa-campus
 ```
 
-Les fichiers `.env` et `.env.production` sont locaux et ignorés par Git. Le conteneur attend un proxy HTTPS et utilise une base à l’emplacement `/app/data` par défaut. Les votes et les avis enregistrés avant cette version restent dans la base. Les réponses historiques d’un navigateur sont rattachées à son premier compte connecté lorsque ce compte n’a pas déjà répondu à la même séance.
+Les fichiers `.env` et `.env.production` sont locaux et ignorés par Git. Le conteneur attend un proxy HTTPS et utilise SQLite à l’emplacement `/app/data` par défaut ; une valeur `DATABASE_URL` sélectionne PostgreSQL. En conservant la même base SQLite, les votes et les avis enregistrés avant cette version restent disponibles. Les réponses historiques d’un navigateur sont rattachées à son premier compte connecté lorsque ce compte n’a pas déjà répondu à la même séance.
 
 ## Sauvegarde du style Cinéma
 

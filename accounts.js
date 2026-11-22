@@ -105,7 +105,11 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
   const signupCode = process.env.STUDENT_SIGNUP_CODE?.trim() || '';
   const signupCodeHash = signupCode ? digest(signupCode) : null;
 
+<<<<<<< HEAD
   await pool.query(`
+=======
+  await db.exec(`
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     CREATE TABLE IF NOT EXISTS student_accounts (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -132,12 +136,18 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     );
   `);
 
+<<<<<<< HEAD
   await pool.query(
     "INSERT INTO auth_settings (name, value) VALUES ('committee_salt', $1) ON CONFLICT (name) DO NOTHING",
     [randomBytes(32)],
   );
   const saltResult = await pool.query("SELECT value FROM auth_settings WHERE name = 'committee_salt'");
   const committeeSalt = saltResult.rows[0].value;
+=======
+  await db.prepare("INSERT INTO auth_settings (name, value) VALUES ('committee_salt', ?) ON CONFLICT (name) DO NOTHING")
+    .run(randomBytes(32));
+  const committeeSalt = (await db.prepare("SELECT value FROM auth_settings WHERE name = 'committee_salt'").get()).value;
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
   const adminUsers = new Map();
 
   for (const config of accounts) {
@@ -195,6 +205,7 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     res.cookie(cookies[type], token, { ...cookieOptions(req), maxAge: duration });
   }
 
+<<<<<<< HEAD
   const studentSessions = {
     remove: (tokenHash) => pool.query('DELETE FROM student_auth_sessions WHERE token_hash = $1', [tokenHash]),
     expire: (now) => pool.query('DELETE FROM student_auth_sessions WHERE expires_at <= $1', [now]),
@@ -228,6 +239,11 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     const expiresAt = Number(expiresAtValue);
     if (expiresAt > now + duration - day) return;
     await statements.renew(now + duration, storedToken(token));
+=======
+  async function renewIfNeeded(req, res, type, statements, token, expiresAt, duration, now) {
+    if (expiresAt > now + duration - day) return;
+    await statements.renew.run(now + duration, storedToken(token));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     setSessionCookie(req, res, type, token, duration);
   }
 
@@ -236,11 +252,18 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     if (!token) return null;
     const now = Date.now();
     const hashed = storedToken(token);
+<<<<<<< HEAD
     const result = await statements.find(hashed, now);
     const row = result.rows[0];
     const user = row ? verify(row) : null;
     if (!user) {
       await statements.remove(hashed);
+=======
+    const row = await statements.find.get(hashed, now);
+    const user = row ? verify(row) : null;
+    if (!user) {
+      await statements.remove.run(hashed);
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
       res.clearCookie(cookies[type], cookieOptions(req));
       return null;
     }
@@ -249,6 +272,7 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
   }
 
   async function student(req, res) {
+<<<<<<< HEAD
     if (req[studentCache] === undefined) {
       req[studentCache] = (await findUserSession(
         req, res, 'student', studentSessions, studentDuration, publicStudent,
@@ -267,19 +291,42 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
       )) || false;
     }
     return req[adminCache] || null;
+=======
+    req[studentCache] ??= findUserSession(req, res, 'student', studentSessions, studentDuration, publicStudent);
+    return await req[studentCache];
+  }
+
+  async function admin(req, res) {
+    req[adminCache] ??= findUserSession(req, res, 'admin', adminSessions, adminDuration, (row) => {
+      const candidate = adminUsers.get(row.username);
+      return candidate?.tag === row.credential_tag ? candidate : null;
+    });
+    return await req[adminCache];
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
   }
 
   async function beginSession(req, res, type, statements, duration, ...identity) {
     const previous = readCookie(req, cookies[type]);
     const token = randomBytes(32).toString('hex');
+<<<<<<< HEAD
     await statements.create(storedToken(token), ...identity, Date.now() + duration);
     if (previous) await statements.remove(storedToken(previous));
+=======
+    await db.transaction(async () => {
+      await statements.create.run(storedToken(token), ...identity, Date.now() + duration);
+      if (previous) await statements.remove.run(storedToken(previous));
+    });
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     setSessionCookie(req, res, type, token, duration);
   }
 
   async function endSession(req, res, type, statements) {
     const token = readCookie(req, cookies[type]);
+<<<<<<< HEAD
     if (token) await statements.remove(storedToken(token));
+=======
+    if (token) await statements.remove.run(storedToken(token));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     res.clearCookie(cookies[type], cookieOptions(req));
   }
 
@@ -303,6 +350,7 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     entry.used++;
   }
 
+<<<<<<< HEAD
   async function cleanup() {
     const now = Date.now();
     await Promise.all([studentSessions.expire(now), adminSessions.expire(now)]);
@@ -314,6 +362,24 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
   await cleanup();
   const cleanupTimer = setInterval(() => {
     cleanup().catch((error) => console.error('Nettoyage des sessions impossible :', error));
+=======
+  let cleaning = false;
+  async function cleanup() {
+    if (cleaning) return;
+    cleaning = true;
+    try {
+      const now = Date.now();
+      await studentSessions.expire.run(now);
+      await adminSessions.expire.run(now);
+      for (const [key, { expiresAt }] of attempts) if (expiresAt <= now) attempts.delete(key);
+    } finally {
+      cleaning = false;
+    }
+  }
+  await cleanup();
+  const cleanupTimer = setInterval(() => {
+    cleanup().catch(() => console.error('Le nettoyage des sessions n’a pas pu aboutir.'));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
   }, 60_000);
   cleanupTimer.unref();
 
@@ -330,9 +396,13 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     await beginSession(req, res, 'student', studentSessions, studentDuration, account.id);
   }
 
+<<<<<<< HEAD
   api.get('/student/session', async (req, res) => {
     res.json(studentPayload(await student(req, res)));
   });
+=======
+  api.get('/student/session', async (req, res) => res.json(studentPayload(await student(req, res))));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
 
   api.post('/student/register', async (req, res) => {
     limit(req, res, 'register-address', 120);
@@ -350,6 +420,7 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     const salt = randomBytes(16);
     const hash = await derivePassword(password, salt);
     const id = randomUUID();
+<<<<<<< HEAD
     const result = await pool.query(`
       INSERT INTO student_accounts (id, email, name, salt, password_hash)
       VALUES ($1, $2, $3, $4, $5)
@@ -359,6 +430,10 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     requireAccount(result.rowCount > 0, 409,
       'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
 
+=======
+    const result = await insertStudent.run(id, email, name, salt, hash);
+    requireAccount(result.changes > 0, 409, 'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     const account = { id, email, name };
     await signInStudent(req, res, account);
     res.status(201).json(studentPayload(account));
@@ -368,8 +443,12 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     limit(req, res, 'student-login-address', 200);
     const email = cleanEmail(req.body?.email);
     if (email) limit(req, res, 'student-login-email', 15, email);
+<<<<<<< HEAD
     const result = await pool.query('SELECT * FROM student_accounts WHERE email = $1', [email]);
     const row = result.rows[0];
+=======
+    const row = await studentByEmail.get(email);
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     const matched = await passwordMatches(req.body?.password, row?.salt, row?.password_hash);
     requireAccount(row && matched, 401, 'Adresse e-mail ou mot de passe incorrect.');
     const account = publicStudent(row);
@@ -382,9 +461,13 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     res.json(studentPayload(null));
   });
 
+<<<<<<< HEAD
   api.get('/admin/session', async (req, res) => {
     res.json(adminPayload(await admin(req, res)));
   });
+=======
+  api.get('/admin/session', async (req, res) => res.json(adminPayload(await admin(req, res))));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
 
   api.post('/admin/login', async (req, res) => {
     requireAccount(adminUsers.size, 503, 'Configurez les comptes du comité avant de vous connecter.');
@@ -420,5 +503,5 @@ export async function installAccounts({ api, pool, production, onStudentAuthenti
     };
   }
 
-  return { student, requireStudent, requireAdmin };
+  return { student, admin, requireStudent, requireAdmin, close: () => clearInterval(cleanupTimer) };
 }
