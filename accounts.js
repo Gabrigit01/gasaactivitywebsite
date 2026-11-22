@@ -60,7 +60,11 @@ function publicStudent(row) {
 }
 
 function publicAdmin(admin) {
-  return admin ? { username: admin.username, role: admin.role, capabilities: roleCapabilities[admin.role] } : null;
+  return admin ? {
+    username: admin.username,
+    role: admin.role,
+    capabilities: roleCapabilities[admin.role],
+  } : null;
 }
 
 function readAdminConfig(production) {
@@ -75,6 +79,7 @@ function readAdminConfig(production) {
     }
     return [{ username, password, role }];
   });
+
   if (production && accounts.length !== 3) {
     throw new Error('Configurez les trois comptes ADMIN_OWNER, ADMIN_ORGANIZER et ADMIN_VIEWER pour la production.');
   }
@@ -91,42 +96,70 @@ function readAdminConfig(production) {
   return { accounts, legacy: false };
 }
 
-export async function installAccounts({ api, db, production, onStudentAuthenticated }) {
+export async function installAccounts({ api, pool, production, onStudentAuthenticated }) {
+  if (!pool || typeof pool.query !== 'function') {
+    throw new TypeError('installAccounts attend un pool PostgreSQL.');
+  }
+
   const { accounts, legacy } = readAdminConfig(production);
   const signupCode = process.env.STUDENT_SIGNUP_CODE?.trim() || '';
   const signupCodeHash = signupCode ? digest(signupCode) : null;
 
+<<<<<<< HEAD
   await db.exec(`
+=======
+<<<<<<< HEAD
+  await pool.query(`
+=======
+  await db.exec(`
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
     CREATE TABLE IF NOT EXISTS student_accounts (
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
-      salt BLOB NOT NULL,
-      password_hash BLOB NOT NULL
+      salt BYTEA NOT NULL,
+      password_hash BYTEA NOT NULL
     );
     CREATE TABLE IF NOT EXISTS student_auth_sessions (
       token_hash TEXT PRIMARY KEY,
       student_id TEXT NOT NULL REFERENCES student_accounts(id) ON DELETE CASCADE,
-      expires_at INTEGER NOT NULL
+      expires_at BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS student_auth_expires ON student_auth_sessions(expires_at);
     CREATE TABLE IF NOT EXISTS committee_auth_sessions (
       token_hash TEXT PRIMARY KEY,
       username TEXT NOT NULL,
       credential_tag TEXT NOT NULL,
-      expires_at INTEGER NOT NULL
+      expires_at BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS committee_auth_expires ON committee_auth_sessions(expires_at);
     CREATE TABLE IF NOT EXISTS auth_settings (
       name TEXT PRIMARY KEY,
-      value BLOB NOT NULL
+      value BYTEA NOT NULL
     );
   `);
 
+<<<<<<< HEAD
   await db.prepare("INSERT INTO auth_settings (name, value) VALUES ('committee_salt', ?) ON CONFLICT (name) DO NOTHING")
     .run(randomBytes(32));
   const committeeSalt = (await db.prepare("SELECT value FROM auth_settings WHERE name = 'committee_salt'").get()).value;
+=======
+<<<<<<< HEAD
+  await pool.query(
+    "INSERT INTO auth_settings (name, value) VALUES ('committee_salt', $1) ON CONFLICT (name) DO NOTHING",
+    [randomBytes(32)],
+  );
+  const saltResult = await pool.query("SELECT value FROM auth_settings WHERE name = 'committee_salt'");
+  const committeeSalt = saltResult.rows[0].value;
+=======
+  await db.prepare("INSERT INTO auth_settings (name, value) VALUES ('committee_salt', ?) ON CONFLICT (name) DO NOTHING")
+    .run(randomBytes(32));
+  const committeeSalt = (await db.prepare("SELECT value FROM auth_settings WHERE name = 'committee_salt'").get()).value;
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
   const adminUsers = new Map();
+
   for (const config of accounts) {
     const { username, role, password } = config;
     const salt = digest(committeeSalt, username);
@@ -134,6 +167,7 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     const tag = digest(role, '\0', hash).toString('hex');
     adminUsers.set(username, { username, role, salt, hash, tag });
   }
+
   const dummySalt = randomBytes(16);
   const dummyHash = randomBytes(32);
   let activeDerivations = 0;
@@ -162,12 +196,6 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     return valid && timingSafeEqual(candidate, hash ? Buffer.from(hash) : dummyHash);
   }
 
-  const studentByEmail = db.prepare('SELECT * FROM student_accounts WHERE email = ?');
-  const insertStudent = db.prepare(`
-    INSERT INTO student_accounts (id, email, name, salt, password_hash)
-    VALUES (?, ?, ?, ?, ?) ON CONFLICT(email) DO NOTHING
-  `);
-
   const cookies = {
     student: production ? '__Host-gasa_student' : 'gasa_student',
     admin: production ? '__Host-gasa_admin' : 'gasa_admin',
@@ -179,28 +207,6 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     return { httpOnly: true, sameSite: 'lax', secure: production || req.secure, path: '/' };
   }
 
-  function sessionStatements(table) {
-    return {
-      remove: db.prepare('DELETE FROM ' + table + ' WHERE token_hash = ?'),
-      expire: db.prepare('DELETE FROM ' + table + ' WHERE expires_at <= ?'),
-      renew: db.prepare('UPDATE ' + table + ' SET expires_at = ? WHERE token_hash = ?'),
-    };
-  }
-  const studentSessions = {
-    ...sessionStatements('student_auth_sessions'),
-    create: db.prepare('INSERT INTO student_auth_sessions (token_hash, student_id, expires_at) VALUES (?, ?, ?)'),
-    find: db.prepare(`
-      SELECT student_accounts.id, student_accounts.email, student_accounts.name, session.expires_at
-      FROM student_auth_sessions AS session JOIN student_accounts ON student_accounts.id = session.student_id
-      WHERE session.token_hash = ? AND session.expires_at > ?
-    `),
-  };
-  const adminSessions = {
-    ...sessionStatements('committee_auth_sessions'),
-    create: db.prepare('INSERT INTO committee_auth_sessions (token_hash, username, credential_tag, expires_at) VALUES (?, ?, ?, ?)'),
-    find: db.prepare('SELECT username, credential_tag, expires_at FROM committee_auth_sessions WHERE token_hash = ? AND expires_at > ?'),
-  };
-
   function storedToken(token) {
     return digest(token).toString('hex');
   }
@@ -209,9 +215,51 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     res.cookie(cookies[type], token, { ...cookieOptions(req), maxAge: duration });
   }
 
+<<<<<<< HEAD
   async function renewIfNeeded(req, res, type, statements, token, expiresAt, duration, now) {
     if (expiresAt > now + duration - day) return;
     await statements.renew.run(now + duration, storedToken(token));
+=======
+<<<<<<< HEAD
+  const studentSessions = {
+    remove: (tokenHash) => pool.query('DELETE FROM student_auth_sessions WHERE token_hash = $1', [tokenHash]),
+    expire: (now) => pool.query('DELETE FROM student_auth_sessions WHERE expires_at <= $1', [now]),
+    renew: (expiresAt, tokenHash) => pool.query(
+      'UPDATE student_auth_sessions SET expires_at = $1 WHERE token_hash = $2', [expiresAt, tokenHash]),
+    create: (tokenHash, studentId, expiresAt) => pool.query(
+      'INSERT INTO student_auth_sessions (token_hash, student_id, expires_at) VALUES ($1, $2, $3)',
+      [tokenHash, studentId, expiresAt]),
+    find: (tokenHash, now) => pool.query(`
+      SELECT a.id, a.email, a.name, s.expires_at
+      FROM student_auth_sessions AS s
+      JOIN student_accounts AS a ON a.id = s.student_id
+      WHERE s.token_hash = $1 AND s.expires_at > $2
+    `, [tokenHash, now]),
+  };
+
+  const adminSessions = {
+    remove: (tokenHash) => pool.query('DELETE FROM committee_auth_sessions WHERE token_hash = $1', [tokenHash]),
+    expire: (now) => pool.query('DELETE FROM committee_auth_sessions WHERE expires_at <= $1', [now]),
+    renew: (expiresAt, tokenHash) => pool.query(
+      'UPDATE committee_auth_sessions SET expires_at = $1 WHERE token_hash = $2', [expiresAt, tokenHash]),
+    create: (tokenHash, username, credentialTag, expiresAt) => pool.query(
+      'INSERT INTO committee_auth_sessions (token_hash, username, credential_tag, expires_at) VALUES ($1, $2, $3, $4)',
+      [tokenHash, username, credentialTag, expiresAt]),
+    find: (tokenHash, now) => pool.query(
+      'SELECT username, credential_tag, expires_at FROM committee_auth_sessions WHERE token_hash = $1 AND expires_at > $2',
+      [tokenHash, now]),
+  };
+
+  async function renewIfNeeded(req, res, type, statements, token, expiresAtValue, duration, now) {
+    const expiresAt = Number(expiresAtValue);
+    if (expiresAt > now + duration - day) return;
+    await statements.renew(now + duration, storedToken(token));
+=======
+  async function renewIfNeeded(req, res, type, statements, token, expiresAt, duration, now) {
+    if (expiresAt > now + duration - day) return;
+    await statements.renew.run(now + duration, storedToken(token));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
     setSessionCookie(req, res, type, token, duration);
   }
 
@@ -220,10 +268,25 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     if (!token) return null;
     const now = Date.now();
     const hashed = storedToken(token);
+<<<<<<< HEAD
     const row = await statements.find.get(hashed, now);
     const user = row ? verify(row) : null;
     if (!user) {
       await statements.remove.run(hashed);
+=======
+<<<<<<< HEAD
+    const result = await statements.find(hashed, now);
+    const row = result.rows[0];
+    const user = row ? verify(row) : null;
+    if (!user) {
+      await statements.remove(hashed);
+=======
+    const row = await statements.find.get(hashed, now);
+    const user = row ? verify(row) : null;
+    if (!user) {
+      await statements.remove.run(hashed);
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
       res.clearCookie(cookies[type], cookieOptions(req));
       return null;
     }
@@ -232,31 +295,82 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
   }
 
   async function student(req, res) {
+<<<<<<< HEAD
     req[studentCache] ??= findUserSession(req, res, 'student', studentSessions, studentDuration, publicStudent);
     return await req[studentCache];
   }
 
   async function admin(req, res) {
+=======
+<<<<<<< HEAD
+    if (req[studentCache] === undefined) {
+      req[studentCache] = (await findUserSession(
+        req, res, 'student', studentSessions, studentDuration, publicStudent,
+      )) || false;
+    }
+    return req[studentCache] || null;
+  }
+
+  async function admin(req, res) {
+    if (req[adminCache] === undefined) {
+      req[adminCache] = (await findUserSession(
+        req, res, 'admin', adminSessions, adminDuration, (row) => {
+          const candidate = adminUsers.get(row.username);
+          return candidate?.tag === row.credential_tag ? candidate : null;
+        },
+      )) || false;
+    }
+    return req[adminCache] || null;
+=======
+    req[studentCache] ??= findUserSession(req, res, 'student', studentSessions, studentDuration, publicStudent);
+    return await req[studentCache];
+  }
+
+  async function admin(req, res) {
+>>>>>>> audiasbranch
     req[adminCache] ??= findUserSession(req, res, 'admin', adminSessions, adminDuration, (row) => {
       const candidate = adminUsers.get(row.username);
       return candidate?.tag === row.credential_tag ? candidate : null;
     });
     return await req[adminCache];
+<<<<<<< HEAD
+=======
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
   }
 
   async function beginSession(req, res, type, statements, duration, ...identity) {
     const previous = readCookie(req, cookies[type]);
     const token = randomBytes(32).toString('hex');
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+    await statements.create(storedToken(token), ...identity, Date.now() + duration);
+    if (previous) await statements.remove(storedToken(previous));
+=======
+>>>>>>> audiasbranch
     await db.transaction(async () => {
       await statements.create.run(storedToken(token), ...identity, Date.now() + duration);
       if (previous) await statements.remove.run(storedToken(previous));
     });
+<<<<<<< HEAD
+=======
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
     setSessionCookie(req, res, type, token, duration);
   }
 
   async function endSession(req, res, type, statements) {
     const token = readCookie(req, cookies[type]);
+<<<<<<< HEAD
     if (token) await statements.remove.run(storedToken(token));
+=======
+<<<<<<< HEAD
+    if (token) await statements.remove(storedToken(token));
+=======
+    if (token) await statements.remove.run(storedToken(token));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
     res.clearCookie(cookies[type], cookieOptions(req));
   }
 
@@ -280,6 +394,7 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     entry.used++;
   }
 
+<<<<<<< HEAD
   let cleaning = false;
   async function cleanup() {
     if (cleaning) return;
@@ -296,6 +411,38 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
   await cleanup();
   const cleanupTimer = setInterval(() => {
     cleanup().catch(() => console.error('Le nettoyage des sessions n’a pas pu aboutir.'));
+=======
+<<<<<<< HEAD
+  async function cleanup() {
+    const now = Date.now();
+    await Promise.all([studentSessions.expire(now), adminSessions.expire(now)]);
+    for (const [key, { expiresAt }] of attempts) {
+      if (expiresAt <= now) attempts.delete(key);
+    }
+  }
+
+  await cleanup();
+  const cleanupTimer = setInterval(() => {
+    cleanup().catch((error) => console.error('Nettoyage des sessions impossible :', error));
+=======
+  let cleaning = false;
+  async function cleanup() {
+    if (cleaning) return;
+    cleaning = true;
+    try {
+      const now = Date.now();
+      await studentSessions.expire.run(now);
+      await adminSessions.expire.run(now);
+      for (const [key, { expiresAt }] of attempts) if (expiresAt <= now) attempts.delete(key);
+    } finally {
+      cleaning = false;
+    }
+  }
+  await cleanup();
+  const cleanupTimer = setInterval(() => {
+    cleanup().catch(() => console.error('Le nettoyage des sessions n’a pas pu aboutir.'));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
   }, 60_000);
   cleanupTimer.unref();
 
@@ -312,7 +459,17 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     await beginSession(req, res, 'student', studentSessions, studentDuration, account.id);
   }
 
+<<<<<<< HEAD
   api.get('/student/session', async (req, res) => res.json(studentPayload(await student(req, res))));
+=======
+<<<<<<< HEAD
+  api.get('/student/session', async (req, res) => {
+    res.json(studentPayload(await student(req, res)));
+  });
+=======
+  api.get('/student/session', async (req, res) => res.json(studentPayload(await student(req, res))));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
 
   api.post('/student/register', async (req, res) => {
     limit(req, res, 'register-address', 120);
@@ -330,8 +487,23 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     const salt = randomBytes(16);
     const hash = await derivePassword(password, salt);
     const id = randomUUID();
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+    const result = await pool.query(`
+      INSERT INTO student_accounts (id, email, name, salt, password_hash)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (email) DO NOTHING
+      RETURNING id
+    `, [id, email, name, salt, hash]);
+    requireAccount(result.rowCount > 0, 409,
+      'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
+
+=======
+>>>>>>> audiasbranch
     const result = await insertStudent.run(id, email, name, salt, hash);
     requireAccount(result.changes > 0, 409, 'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
     const account = { id, email, name };
     await signInStudent(req, res, account);
     res.status(201).json(studentPayload(account));
@@ -341,7 +513,16 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     limit(req, res, 'student-login-address', 200);
     const email = cleanEmail(req.body?.email);
     if (email) limit(req, res, 'student-login-email', 15, email);
+<<<<<<< HEAD
     const row = await studentByEmail.get(email);
+=======
+<<<<<<< HEAD
+    const result = await pool.query('SELECT * FROM student_accounts WHERE email = $1', [email]);
+    const row = result.rows[0];
+=======
+    const row = await studentByEmail.get(email);
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
     const matched = await passwordMatches(req.body?.password, row?.salt, row?.password_hash);
     requireAccount(row && matched, 401, 'Adresse e-mail ou mot de passe incorrect.');
     const account = publicStudent(row);
@@ -354,7 +535,17 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     res.json(studentPayload(null));
   });
 
+<<<<<<< HEAD
   api.get('/admin/session', async (req, res) => res.json(adminPayload(await admin(req, res))));
+=======
+<<<<<<< HEAD
+  api.get('/admin/session', async (req, res) => {
+    res.json(adminPayload(await admin(req, res)));
+  });
+=======
+  api.get('/admin/session', async (req, res) => res.json(adminPayload(await admin(req, res))));
+>>>>>>> 46af8761b5c0729dc4d3067b5c928260bcb377d4
+>>>>>>> audiasbranch
 
   api.post('/admin/login', async (req, res) => {
     requireAccount(adminUsers.size, 503, 'Configurez les comptes du comité avant de vous connecter.');
@@ -383,7 +574,8 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     return async (req, res, next) => {
       const account = await admin(req, res);
       requireAccount(account, 401, 'Connectez-vous pour ouvrir le tableau de bord.');
-      requireAccount(roleCapabilities[account.role].includes(capability), 403, 'Vous n’avez pas accès à cette action.');
+      requireAccount(roleCapabilities[account.role].includes(capability), 403,
+        'Vous n’avez pas accès à cette action.');
       req.admin = publicAdmin(account);
       next();
     };
