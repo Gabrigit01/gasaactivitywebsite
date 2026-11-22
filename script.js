@@ -698,3 +698,17 @@ function setupGallery() {
 
 setupParallax($("accueil-classique"));
 setupGallery();
+const siteHeader = document.querySelector(".site-header");
+if (siteHeader && !reducedMotion.matches) {
+  siteHeader.addEventListener("pointermove", (event) => {
+    if (event.pointerType === "touch") return;
+    const rect = siteHeader.getBoundingClientRect();
+    siteHeader.style.setProperty("--header-x", `${event.clientX - rect.left}px`);
+    siteHeader.style.setProperty("--header-y", `${event.clientY - rect.top}px`);
+  }, { passive: true });
+
+  siteHeader.addEventListener("pointerleave", () => {
+    siteHeader.style.removeProperty("--header-x");
+    siteHeader.style.removeProperty("--header-y");
+  });
+}
