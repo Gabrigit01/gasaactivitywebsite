@@ -9,10 +9,13 @@ const adminDuration = 180 * day;
 const attemptWindow = 15 * 60 * 1000;
 const maxParallelDerivations = 3;
 const maxQueuedDerivations = 24;
+const passwordResetDuration = 30 * 60 * 1000;
+const recoveryUnavailable = 'La récupération par e-mail est indisponible. Contactez le responsable du site.';
+const recoveryConfirmation = 'Si un compte correspond à cette adresse, un lien de réinitialisation sera envoyé par e-mail.';
 
 const roleCapabilities = {
-  owner: ['read', 'edit', 'archive', 'moderate', 'share', 'export'],
-  organizer: ['read', 'edit', 'moderate', 'share'],
+  owner: ['read', 'edit', 'archive', 'moderate', 'share', 'export', 'trace'],
+  organizer: ['read', 'edit', 'moderate', 'share', 'trace'],
   viewer: ['read'],
 };
 
@@ -91,7 +94,7 @@ function readAdminConfig(production) {
   return { accounts, legacy: false };
 }
 
-export async function installAccounts({ api, db, production, onStudentAuthenticated }) {
+export async function installAccounts({ api, db, production, onStudentAuthenticated, onAccountEvent, publicOrigin, sendEmail }) {
   const { accounts, legacy } = readAdminConfig(production);
   const signupCode = process.env.STUDENT_SIGNUP_CODE?.trim() || '';
   const signupCodeHash = signupCode ? digest(signupCode) : null;
@@ -102,7 +105,8 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       salt BLOB NOT NULL,
-      password_hash BLOB NOT NULL
+      password_hash BLOB NOT NULL,
+      created_at TEXT
     );
     CREATE TABLE IF NOT EXISTS student_auth_sessions (
       token_hash TEXT PRIMARY KEY,
@@ -110,6 +114,13 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
       expires_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS student_auth_expires ON student_auth_sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS student_password_resets (
+      token_hash TEXT PRIMARY KEY,
+      student_id TEXT NOT NULL REFERENCES student_accounts(id) ON DELETE CASCADE,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS student_password_reset_expires ON student_password_resets(expires_at);
+    CREATE INDEX IF NOT EXISTS student_password_reset_account ON student_password_resets(student_id);
     CREATE TABLE IF NOT EXISTS committee_auth_sessions (
       token_hash TEXT PRIMARY KEY,
       username TEXT NOT NULL,
@@ -122,6 +133,12 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
       value BLOB NOT NULL
     );
   `);
+  const accountColumns = db.dialect === 'postgres'
+    ? await db.prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'student_accounts' AND table_schema = current_schema()").all()
+    : await db.prepare('PRAGMA table_info(student_accounts)').all();
+  if (!accountColumns.some(column => (column.column_name || column.name) === 'created_at')) {
+    await db.exec('ALTER TABLE student_accounts ADD COLUMN created_at TEXT');
+  }
 
   await db.prepare("INSERT INTO auth_settings (name, value) VALUES ('committee_salt', ?) ON CONFLICT (name) DO NOTHING")
     .run(randomBytes(32));
@@ -163,9 +180,23 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
   }
 
   const studentByEmail = db.prepare('SELECT * FROM student_accounts WHERE email = ?');
+  const studentById = db.prepare('SELECT * FROM student_accounts WHERE id = ?');
+  // A neutral UPDATE locks the account row on PostgreSQL and is also valid on SQLite.
+  // Logins, password updates and token consumption must share this transaction lock.
+  const lockStudent = db.prepare('UPDATE student_accounts SET name = name WHERE id = ?');
+  const replacePassword = db.prepare('UPDATE student_accounts SET salt = ?, password_hash = ? WHERE id = ?');
+  const revokeStudentSessions = db.prepare('DELETE FROM student_auth_sessions WHERE student_id = ?');
+  const passwordResets = {
+    create: db.prepare('INSERT INTO student_password_resets (token_hash, student_id, expires_at) VALUES (?, ?, ?)'),
+    find: db.prepare('SELECT student_id FROM student_password_resets WHERE token_hash = ? AND expires_at > ?'),
+    consume: db.prepare('DELETE FROM student_password_resets WHERE token_hash = ? AND student_id = ? AND expires_at > ? RETURNING student_id'),
+    remove: db.prepare('DELETE FROM student_password_resets WHERE token_hash = ?'),
+    revoke: db.prepare('DELETE FROM student_password_resets WHERE student_id = ?'),
+    expire: db.prepare('DELETE FROM student_password_resets WHERE expires_at <= ?'),
+  };
   const insertStudent = db.prepare(`
-    INSERT INTO student_accounts (id, email, name, salt, password_hash)
-    VALUES (?, ?, ?, ?, ?) ON CONFLICT(email) DO NOTHING
+    INSERT INTO student_accounts (id, email, name, salt, password_hash, created_at)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(email) DO NOTHING
   `);
 
   const cookies = {
@@ -287,6 +318,7 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     try {
       const now = Date.now();
       await studentSessions.expire.run(now);
+      await passwordResets.expire.run(now);
       await adminSessions.expire.run(now);
       for (const [key, { expiresAt }] of attempts) if (expiresAt <= now) attempts.delete(key);
     } finally {
@@ -299,17 +331,74 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
   }, 60_000);
   cleanupTimer.unref();
 
+  function configuredRecoveryOrigin(value) {
+    try {
+      const url = new URL(value);
+      if (url.username || url.password || url.pathname !== '/' || url.search || url.hash) return null;
+      if (url.protocol === 'https:' || (!production && url.protocol === 'http:'
+        && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) return url.origin;
+    } catch { /* Configuration errors never expose a submitted address. */ }
+    return null;
+  }
+
+  const configuredPasswordOrigin = publicOrigin ? configuredRecoveryOrigin(publicOrigin) : null;
+  function recoveryOrigin(req) {
+    if (publicOrigin) return configuredPasswordOrigin;
+    if (production) return null;
+    const candidate = configuredRecoveryOrigin((req.secure ? 'https://' : 'http://') + req.get('host'));
+    if (!candidate || !['localhost', '127.0.0.1', '[::1]'].includes(new URL(candidate).hostname)) return null;
+    return candidate;
+  }
+
+  let deliverRecoveryEmail = typeof sendEmail === 'function' ? sendEmail : null;
+  if (!deliverRecoveryEmail) {
+    const host = process.env.SMTP_HOST?.trim();
+    const from = cleanEmail(process.env.SMTP_FROM);
+    const port = Number(process.env.SMTP_PORT || (process.env.SMTP_SECURE === 'true' ? 465 : 587));
+    const secureSetting = process.env.SMTP_SECURE;
+    const user = process.env.SMTP_USER;
+    const password = process.env.SMTP_PASSWORD;
+    if (host && !/[\s\r\n]/u.test(host) && from && Number.isInteger(port) && port >= 1 && port <= 65535
+      && (!secureSetting || ['true', 'false'].includes(secureSetting)) && Boolean(user) === Boolean(password)) {
+      const { default: nodemailer } = await import('nodemailer');
+      const transport = nodemailer.createTransport({
+        host, port, secure: secureSetting === 'true',
+        ...(user ? { auth: { user, pass: password } } : {}),
+        ...(production && secureSetting !== 'true' ? { requireTLS: true } : {}),
+        connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
+        tls: { minVersion: 'TLSv1.2' },
+      });
+      deliverRecoveryEmail = message => transport.sendMail({ ...message, from });
+    }
+  }
+  const passwordRecoveryEnabled = Boolean(deliverRecoveryEmail && (configuredPasswordOrigin || !production && !publicOrigin));
+  const deliveries = new Set();
+
   function studentPayload(account) {
-    return { authenticated: Boolean(account), student: account, signupCodeRequired: Boolean(signupCodeHash) };
+    return { authenticated: Boolean(account), student: account, signupCodeRequired: Boolean(signupCodeHash), passwordRecoveryEnabled };
   }
 
   function adminPayload(account) {
     return { authenticated: Boolean(account), configured: adminUsers.size > 0, legacy, admin: publicAdmin(account) };
   }
 
-  async function signInStudent(req, res, account) {
-    await onStudentAuthenticated?.(req, res, account);
-    await beginSession(req, res, 'student', studentSessions, studentDuration, account.id);
+  async function accountEvent(kind, account) {
+    await onAccountEvent?.({ kind, studentId: account.id, name: account.name, email: account.email });
+  }
+
+  async function signInStudent(req, res, account, credentials, kind = 'student.login') {
+    await db.transaction(async () => {
+      await lockStudent.run(account.id);
+      if (credentials) {
+        const current = await studentById.get(account.id);
+        requireAccount(current && timingSafeEqual(Buffer.from(current.password_hash), Buffer.from(credentials.password_hash))
+          && timingSafeEqual(Buffer.from(current.salt), Buffer.from(credentials.salt)), 401,
+        'Le mot de passe a changé. Connectez-vous à nouveau.');
+      }
+      await onStudentAuthenticated?.(req, res, account);
+      await beginSession(req, res, 'student', studentSessions, studentDuration, account.id);
+      await accountEvent(kind, account);
+    });
   }
 
   api.get('/student/session', async (req, res) => res.json(studentPayload(await student(req, res))));
@@ -330,10 +419,12 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     const salt = randomBytes(16);
     const hash = await derivePassword(password, salt);
     const id = randomUUID();
-    const result = await insertStudent.run(id, email, name, salt, hash);
-    requireAccount(result.changes > 0, 409, 'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
     const account = { id, email, name };
-    await signInStudent(req, res, account);
+    await db.transaction(async () => {
+      const result = await insertStudent.run(id, email, name, salt, hash, new Date().toISOString());
+      requireAccount(result.changes > 0, 409, 'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
+      await signInStudent(req, res, account, null, 'student.register');
+    });
     res.status(201).json(studentPayload(account));
   });
 
@@ -345,12 +436,103 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     const matched = await passwordMatches(req.body?.password, row?.salt, row?.password_hash);
     requireAccount(row && matched, 401, 'Adresse e-mail ou mot de passe incorrect.');
     const account = publicStudent(row);
-    await signInStudent(req, res, account);
+    await signInStudent(req, res, account, row);
     res.json(studentPayload(account));
   });
 
-  api.post('/student/logout', async (req, res) => {
+  api.post('/student/password/forgot', async (req, res) => {
+    // A campus often shares one public address; keep the tighter quota per email.
+    limit(req, res, 'password-forgot-address', 60);
+    const origin = recoveryOrigin(req);
+    requireAccount(passwordRecoveryEnabled && origin, 503, recoveryUnavailable);
+    const email = cleanEmail(req.body?.email);
+    requireAccount(email, 400, 'Saisissez une adresse e-mail valide.');
+    limit(req, res, 'password-forgot-email', 3, email);
+    // Respond identically before delivery, including for absent accounts or SMTP failures.
+    // No token is returned by the API or included in an error log.
+    const delivery = (async () => {
+      const account = await studentByEmail.get(email);
+      if (!account) return;
+      const token = randomBytes(32).toString('hex');
+      const tokenHash = storedToken(token);
+      await passwordResets.create.run(tokenHash, account.id, Date.now() + passwordResetDuration);
+      const url = new URL('/', origin);
+      url.searchParams.set('reset', token);
+      try {
+        await deliverRecoveryEmail({
+          to: account.email,
+          subject: 'Réinitialiser votre mot de passe étudiant — UATM GASA',
+          text: 'Vous avez demandé un nouveau mot de passe pour votre compte étudiant UATM GASA.\n\n'
+            + 'Ouvrez ce lien dans les 30 minutes :\n' + url.href + '\n\n'
+            + 'Ce lien est utilisable une seule fois. Si vous n’êtes pas à l’origine de cette demande, ignorez cet e-mail.',
+        });
+      } catch {
+        await passwordResets.remove.run(tokenHash);
+        console.error('L’envoi d’un e-mail de récupération n’a pas pu aboutir.');
+      }
+    })();
+    deliveries.add(delivery);
+    delivery.catch(() => console.error('Une demande de récupération n’a pas pu aboutir.'))
+      .finally(() => deliveries.delete(delivery));
+    res.status(202).json({ message: recoveryConfirmation });
+  });
+
+  api.post('/student/password/reset', async (req, res) => {
+    limit(req, res, 'password-reset-address', 30);
+    const { token, password } = req.body ?? {};
+    const invalidLink = 'Ce lien est invalide ou a expiré. Demandez un nouveau lien.';
+    requireAccount(typeof token === 'string' && /^[a-f0-9]{64}$/.test(token), 400, invalidLink);
+    requireAccount(isPassword(password) && password.length >= 12, 400, 'Choisissez un mot de passe de 12 à 128 caractères.');
+    const tokenHash = storedToken(token);
+    const reset = await passwordResets.find.get(tokenHash, Date.now());
+    requireAccount(reset, 400, invalidLink);
+    const salt = randomBytes(16);
+    const hash = await derivePassword(password, salt);
+    await db.transaction(async () => {
+      await lockStudent.run(reset.student_id);
+      const consumed = await passwordResets.consume.get(tokenHash, reset.student_id, Date.now());
+      requireAccount(consumed, 400, invalidLink);
+      await replacePassword.run(salt, hash, reset.student_id);
+      await revokeStudentSessions.run(reset.student_id);
+      await passwordResets.revoke.run(reset.student_id);
+      await accountEvent('student.password-reset', await studentById.get(reset.student_id));
+    });
     await endSession(req, res, 'student', studentSessions);
+    res.json({ ...studentPayload(null), message: 'Mot de passe réinitialisé. Connectez-vous avec votre nouveau mot de passe.' });
+  });
+
+  api.post('/student/password/change', async (req, res) => {
+    limit(req, res, 'password-change-address', 30);
+    const account = await student(req, res);
+    requireAccount(account, 401, 'Connectez-vous pour modifier votre mot de passe.');
+    limit(req, res, 'password-change-account', 6, account.id);
+    const { currentPassword, password } = req.body ?? {};
+    requireAccount(isPassword(password) && password.length >= 12, 400, 'Choisissez un mot de passe de 12 à 128 caractères.');
+    const credentials = await studentById.get(account.id);
+    requireAccount(credentials && await passwordMatches(currentPassword, credentials.salt, credentials.password_hash),
+      401, 'Le mot de passe actuel est incorrect.');
+    const salt = randomBytes(16);
+    const hash = await derivePassword(password, salt);
+    await db.transaction(async () => {
+      await lockStudent.run(account.id);
+      const current = await studentById.get(account.id);
+      requireAccount(current && timingSafeEqual(Buffer.from(current.password_hash), Buffer.from(credentials.password_hash)),
+        401, 'Le mot de passe a changé. Connectez-vous à nouveau.');
+      await replacePassword.run(salt, hash, account.id);
+      await revokeStudentSessions.run(account.id);
+      await passwordResets.revoke.run(account.id);
+      await accountEvent('student.password-change', account);
+    });
+    await endSession(req, res, 'student', studentSessions);
+    res.json({ ...studentPayload(null), message: 'Mot de passe modifié. Reconnectez-vous sur vos appareils.' });
+  });
+
+  api.post('/student/logout', async (req, res) => {
+    const account = await student(req, res);
+    await db.transaction(async () => {
+      await endSession(req, res, 'student', studentSessions);
+      if (account) await accountEvent('student.logout', account);
+    });
     res.json(studentPayload(null));
   });
 
@@ -389,5 +571,8 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     };
   }
 
-  return { student, admin, requireStudent, requireAdmin, close: () => clearInterval(cleanupTimer) };
+  return { student, admin, requireStudent, requireAdmin, close: async () => {
+    clearInterval(cleanupTimer);
+    await Promise.allSettled([...deliveries]);
+  } };
 }

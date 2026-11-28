@@ -238,7 +238,8 @@ function renderVote() {
     grid.append(card);
   }
 
-  replace("vote", grid);
+  replace("vote", grid, element("p", { class: "participation-note" },
+    "Votre nom, votre e-mail et la date de votre réponse sont visibles par les membres autorisés du comité."));
 }
 
 function renderFeedback() {
@@ -280,7 +281,7 @@ function renderFeedback() {
       placeholder: "Un moment apprécié, une idée ou un point à améliorer…",
     }),
     element("div", { class: "feedback-actions" },
-      element("p", {}, "Votre nom n’apparaît pas dans le bilan des avis."),
+      element("p", {}, "Votre avis, votre nom et sa date sont visibles par les membres autorisés du comité."),
       send));
   selection.addEventListener("change", () => {
     details.hidden = false;

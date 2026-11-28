@@ -282,3 +282,4 @@ body.is-direct .past-edition .feedback-section { margin-top: 29px; }
   .feedback-detail { animation: none; }
   .experience-option { transition: none; }
 }
+.participation-note { margin-top:18px; color:var(--muted); font-size:.8rem; line-height:1.6; max-width:75ch; }

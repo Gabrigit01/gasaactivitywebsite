@@ -5,6 +5,23 @@
   const preferenceKey = "gasa_student_theme";
   const $ = (id) => document.getElementById(id);
   const root = document.documentElement;
+  const incomingUrl = new URL(window.location.href);
+  let resetToken = incomingUrl.searchParams.has("reset") ? incomingUrl.searchParams.get("reset") : null;
+  if (resetToken !== null) {
+    incomingUrl.searchParams.delete("reset");
+    window.history.replaceState(window.history.state, "", incomingUrl.pathname + incomingUrl.search + incomingUrl.hash);
+    let referrer = document.querySelector('meta[name="referrer"]');
+    if (!referrer) {
+      referrer = document.createElement("meta");
+      referrer.name = "referrer";
+      document.head.append(referrer);
+    }
+    referrer.content = "no-referrer";
+  }
+  const recoveryStyles = document.createElement("link");
+  recoveryStyles.rel = "stylesheet";
+  recoveryStyles.href = "/account-recovery.css";
+  document.head.append(recoveryStyles);
 
   let theme = "light";
   try {
@@ -31,6 +48,9 @@
 
   let student = null;
   let signupCodeRequired = false;
+  let passwordRecoveryEnabled = false;
+  let recoveryMode = null;
+  let recoveryBusy = false;
   let mode = "login";
   let pending = null;
   let authorization = null;
@@ -40,6 +60,7 @@
     accountRevision += 1;
     student = data.student;
     signupCodeRequired = data.signupCodeRequired;
+    passwordRecoveryEnabled = Boolean(data.passwordRecoveryEnabled);
     renderAccount();
   }
 
@@ -51,13 +72,22 @@
     error.hidden = !message;
   }
 
+  function accountStatus(message) {
+    const status = $("student-status");
+    if (!status) return;
+    status.textContent = message;
+    status.hidden = !message;
+  }
+
   function renderAccount() {
     const account = $("student-account");
     if (!account) return;
     account.textContent = student ? "Mon compte étudiant" : "Connexion étudiante";
-    $("student-profile").hidden = !student;
-    $("student-form").hidden = Boolean(student);
-    $("student-dialog-title").textContent = student ? "Mon compte étudiant"
+    $("student-profile").hidden = !student || Boolean(recoveryMode);
+    $("student-form").hidden = Boolean(student) || Boolean(recoveryMode);
+    $("student-dialog-title").textContent = recoveryMode ? {
+      forgot: "Mot de passe oublié", reset: "Nouveau mot de passe", change: "Changer mon mot de passe",
+    }[recoveryMode] : student ? "Mon compte étudiant"
       : mode === "register" ? "Créer mon compte étudiant" : "Connexion étudiante";
     $("student-profile-name").textContent = student?.name || "";
     $("student-profile-email").textContent = student?.email || "";
@@ -71,12 +101,37 @@
     $("student-password").autocomplete = registering ? "new-password" : "current-password";
     $("student-submit").textContent = registering ? "Créer mon compte" : "Se connecter";
     $("student-mode").textContent = registering ? "J’ai déjà un compte" : "Créer un compte";
+    if ($("student-registration-privacy")) $("student-registration-privacy").hidden = !registering;
+    if ($("student-forgot")) $("student-forgot").hidden = registering;
+    if ($("student-recovery-form")) {
+      $("student-recovery-form").hidden = !recoveryMode;
+      const forgot = recoveryMode === "forgot";
+      const changing = recoveryMode === "change";
+      $("student-recovery-email-row").hidden = !forgot;
+      $("student-recovery-email").required = forgot;
+      $("student-current-password-row").hidden = !changing;
+      $("student-current-password").required = changing;
+      $("student-new-password-row").hidden = forgot;
+      $("student-new-password").required = !forgot;
+      $("student-confirm-password-row").hidden = forgot;
+      $("student-confirm-password").required = !forgot;
+      $("student-recovery-submit").textContent = forgot ? "Recevoir le lien" : "Enregistrer le mot de passe";
+      $("student-recovery-submit").disabled = recoveryBusy || forgot && !passwordRecoveryEnabled;
+      $("student-recovery-back").disabled = recoveryBusy;
+      $("student-recovery-note").textContent = forgot
+        ? passwordRecoveryEnabled
+          ? "Indiquez l’adresse de votre compte étudiant. Le lien reçu sera valable 30 minutes."
+          : "La récupération par e-mail est indisponible. Contactez le responsable du site."
+        : "Choisissez un mot de passe de 12 à 128 caractères. Vos sessions sur tous les appareils seront fermées.";
+    }
   }
 
   function openAccount(forResponse) {
     mode = "login";
+    recoveryMode = resetToken !== null ? "reset" : null;
     $("student-dialog-context").hidden = !forResponse;
     accountError("");
+    accountStatus("");
     renderAccount();
     const dialog = $("student-dialog");
     if (!dialog.open) dialog.showModal();
@@ -129,6 +184,112 @@
   function connectAccount() {
     const dialog = $("student-dialog");
     const form = $("student-form");
+    $("student-dialog-context").textContent = "Connectez-vous pour participer aux activités et accéder aux vidéos étudiantes.";
+    const recovery = document.createElement("form");
+    recovery.id = "student-recovery-form";
+    recovery.hidden = true;
+    recovery.innerHTML = `
+      <p class="student-dialog-note" id="student-recovery-note"></p>
+      <label id="student-recovery-email-row" for="student-recovery-email">Adresse e-mail
+        <input type="email" id="student-recovery-email" name="email" autocomplete="username" maxlength="254">
+      </label>
+      <label id="student-current-password-row" for="student-current-password">Mot de passe actuel
+        <input type="password" id="student-current-password" name="currentPassword" autocomplete="current-password" maxlength="128">
+      </label>
+      <label id="student-new-password-row" for="student-new-password">Nouveau mot de passe
+        <input type="password" id="student-new-password" name="password" autocomplete="new-password" minlength="12" maxlength="128">
+      </label>
+      <label id="student-confirm-password-row" for="student-confirm-password">Confirmer le nouveau mot de passe
+        <input type="password" id="student-confirm-password" autocomplete="new-password" minlength="12" maxlength="128">
+      </label>
+      <div class="student-dialog-actions">
+        <button type="submit" class="button button-dark" id="student-recovery-submit">Recevoir le lien</button>
+        <button type="button" class="button button-outline" id="student-recovery-back">Retour</button>
+      </div>`;
+    form.after(recovery);
+    const status = document.createElement("p");
+    status.id = "student-status";
+    status.className = "student-account-status";
+    status.setAttribute("role", "status");
+    status.hidden = true;
+    recovery.after(status);
+    const forgot = document.createElement("button");
+    forgot.id = "student-forgot";
+    forgot.type = "button";
+    forgot.className = "student-password-link";
+    forgot.textContent = "Mot de passe oublié ?";
+    form.append(forgot);
+    const privacy = document.createElement("p");
+    privacy.id = "student-registration-privacy";
+    privacy.className = "student-dialog-note";
+    privacy.hidden = true;
+    privacy.textContent = "Votre nom, votre e-mail et vos participations sont accessibles aux membres autorisés du comité.";
+    $("student-code-row").after(privacy);
+    const change = document.createElement("button");
+    change.id = "student-password-change";
+    change.type = "button";
+    change.className = "button button-outline";
+    change.textContent = "Changer mon mot de passe";
+    $("student-logout").before(change);
+
+    function showRecovery(nextMode) {
+      recoveryMode = nextMode;
+      recovery.reset();
+      accountError("");
+      accountStatus("");
+      renderAccount();
+      $(nextMode === "forgot" ? "student-recovery-email"
+        : nextMode === "change" ? "student-current-password" : "student-new-password").focus();
+    }
+    forgot.addEventListener("click", () => showRecovery("forgot"));
+    change.addEventListener("click", () => showRecovery("change"));
+    $("student-recovery-back").addEventListener("click", () => {
+      recoveryMode = null;
+      resetToken = null;
+      recovery.reset();
+      accountError("");
+      accountStatus("");
+      renderAccount();
+    });
+    recovery.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = $("student-recovery-submit");
+      if (submit.disabled) return;
+      const action = recoveryMode;
+      const data = Object.fromEntries(new FormData(recovery));
+      if (action !== "forgot" && data.password !== $("student-confirm-password").value) {
+        accountError("Les deux nouveaux mots de passe ne correspondent pas.");
+        $("student-confirm-password").focus();
+        return;
+      }
+      submit.disabled = true;
+      recoveryBusy = true;
+      $("student-recovery-back").disabled = true;
+      accountError("");
+      accountStatus("");
+      try {
+        const payload = action === "forgot" ? { email: data.email }
+          : action === "reset" ? { token: resetToken, password: data.password }
+          : { currentPassword: data.currentPassword, password: data.password };
+        const result = await request("student/password/" + action, "POST", payload);
+        recovery.reset();
+        if (action !== "forgot") {
+          resetToken = null;
+          recoveryMode = null;
+          mode = "login";
+          syncAccount(result);
+          broadcastAccountChange();
+          accountChanged();
+          $("student-email").focus();
+        }
+        accountStatus(result.message);
+      } catch (error) {
+        accountError(error.message);
+      } finally {
+        recoveryBusy = false;
+        renderAccount();
+      }
+    });
     $("student-account").addEventListener("click", async () => {
       await ready;
       openAccount(false);
@@ -138,7 +299,10 @@
       pending?.(false);
       pending = null;
       form.reset();
+      recovery.reset();
+      recoveryMode = null;
       accountError("");
+      accountStatus("");
     });
     $("student-mode").addEventListener("click", () => {
       mode = mode === "login" ? "register" : "login";
@@ -186,6 +350,10 @@
       }
     });
     renderAccount();
+    if (resetToken !== null) ready.then(() => {
+      openAccount(false);
+      $("student-new-password").focus();
+    });
   }
 
   function base64Key(value) {

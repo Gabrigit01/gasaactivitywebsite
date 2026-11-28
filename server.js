@@ -9,8 +9,10 @@ import { Document, HeadingLevel, Packer, Paragraph } from 'docx';
 import QRCode from 'qrcode';
 import { AccountError, installAccounts } from './accounts.js';
 import { createPush } from './push.js';
+import { EngagementError, installEngagement } from './engagement.js';
+import { installCinema } from './cinema.js';
 
-export async function createApplication({ database } = {}) {
+export async function createApplication({ database, sendEmail } = {}) {
 const root = fileURLToPath(new URL('.', import.meta.url));
 const dataDir = resolve(process.env.DATA_DIR || resolve(root, 'data'));
 const production = process.env.NODE_ENV === 'production';
@@ -247,13 +249,13 @@ function readImage(value) {
   if (!text) return '/images/im5.jpeg';
   try {
     const url = new URL(text, 'http://local.invalid');
-    if (text.startsWith('/images/') && url.origin === 'http://local.invalid'
-      && url.pathname.startsWith('/images/') && !url.search && !url.hash) return url.pathname;
+    if ((text.startsWith('/images/') || /^\/media\/images\/[a-f0-9-]{36}$/.test(text)) && url.origin === 'http://local.invalid'
+      && (url.pathname.startsWith('/images/') || url.pathname.startsWith('/media/images/')) && !url.search && !url.hash) return url.pathname;
     if (url.protocol === 'https:' && !url.username && !url.password) return url.href;
   } catch {
     // L’erreur est commune aux URL non autorisées.
   }
-  throw new RequestError(400, 'Choisissez une image du dossier /images/ ou une URL HTTPS.');
+  throw new RequestError(400, 'Importez une image, choisissez une image du site ou indiquez une URL HTTPS.');
 }
 
 async function readActivity(body, existing) {
@@ -352,9 +354,9 @@ app.use((req, res, next) => {
   if (production && req.secure) res.set('Strict-Transport-Security', 'max-age=31536000');
   res.set({
     'X-Content-Type-Options': 'nosniff',
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Referrer-Policy': req.query.reset ? 'no-referrer' : 'strict-origin-when-cross-origin',
     'X-Frame-Options': 'DENY',
-    'Content-Security-Policy': "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; form-action 'self'",
+    'Content-Security-Policy': "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; form-action 'self'",
   });
   next();
 });
@@ -402,16 +404,25 @@ async function migrateBrowserResponses(req, res, student) {
   if (!previous) return;
   await mutate(async () => {
     for (const table of ['votes', 'feedback', 'guesses']) {
-      await db.prepare(`UPDATE ${table} AS legacy SET participant = ? WHERE participant = ? AND NOT EXISTS (
+      const migrated = await db.prepare(`UPDATE ${table} AS legacy SET participant = ? WHERE participant = ? AND NOT EXISTS (
         SELECT 1 FROM ${table} AS current_response
         WHERE current_response.sessionId = legacy.sessionId AND current_response.participant = ?
-      )`).run('student:' + student.id, previous, 'student:' + student.id);
+      ) RETURNING sessionId`).all('student:' + student.id, previous, 'student:' + student.id);
+      for (const row of migrated) {
+        await db.prepare('UPDATE user_actions SET student_id=?,actor_name=?,actor_email=? WHERE id=? AND student_id IS NULL')
+          .run(student.id, student.name, student.email, `historique-${table}-${row.sessionId}-${previous}`);
+      }
     }
   });
   res.clearCookie('gasa_participant', { httpOnly: true, sameSite: 'lax', secure: production || req.secure, path: '/' });
 }
 
-const auth = await installAccounts({ api, db, production, onStudentAuthenticated: migrateBrowserResponses });
+let engagement;
+const auth = await installAccounts({ api, db, production, publicOrigin, sendEmail,
+  onStudentAuthenticated: migrateBrowserResponses,
+  onAccountEvent: event => engagement?.recordAccountEvent(event) });
+engagement = await installEngagement({ app, api, db, auth, mutate });
+const cinema = await installCinema({ api, db, auth, publicOrigin, mutate, onChange: event => engagement.record(event) });
 const push = await createPush({ db });
 push.mount(api);
 await push.syncScheduledReveals((await db.prepare("SELECT * FROM sessions WHERE status = 'published'").all()).map(sessionFromRow));
@@ -441,6 +452,7 @@ async function saveSessionAndNotice(session, previous = null) {
 api.get('/admin/dashboard', async (req, res) => {
   const sessions = (await db.prepare('SELECT * FROM sessions ORDER BY createdAt DESC, ' + db.orderColumn + ' DESC')
     .all()).map(sessionFromRow);
+  for (const session of sessions) session.cinema = await cinema.readForSession(session.id);
   res.json({ activities: await activities(), sessions, publicUrl: publicOrigin || requestOrigin(req) });
 });
 
@@ -449,6 +461,7 @@ api.post('/admin/activities', auth.requireAdmin('edit'), async (req, res) => {
     const value = await readActivity(req.body);
     if (value.archived) requireArchivePermission(req);
     await writeActivity(value);
+    await engagement.record({ kind: 'admin.activity-create', admin: req.admin, detail: value.name });
     return value;
   });
   res.status(201).json(activity);
@@ -461,16 +474,21 @@ api.put('/admin/activities/:id', auth.requireAdmin('edit'), async (req, res) => 
     const value = await readActivity(req.body, existing);
     if (value.archived || existing.archived) requireArchivePermission(req);
     await updateActivity(value, existing);
+    await engagement.record({ kind: 'admin.activity-update', admin: req.admin, detail: value.name });
     return value;
   });
   res.json(activity);
 });
 
 api.post('/admin/sessions', auth.requireAdmin('edit'), async (req, res) => {
+  const clip = req.body?.cinema !== undefined ? await cinema.validateCinema(req.body.cinema) : undefined;
   const session = await mutate(async () => {
     const value = await readSession(req.body);
     if (value.status === 'archived') requireArchivePermission(req);
     await saveSessionAndNotice(value);
+    if (clip !== undefined) await cinema.persistCinema(value.id, clip);
+    await engagement.record({ kind: 'admin.session-create', admin: req.admin, session: value, detail: value.status });
+    value.cinema = await cinema.readForSession(value.id);
     return value;
   });
   push.wake();
@@ -484,12 +502,16 @@ async function sessionOr404(id) {
 }
 
 api.put('/admin/sessions/:id', auth.requireAdmin('edit'), async (req, res) => {
+  const clip = req.body?.cinema !== undefined ? await cinema.validateCinema(req.body.cinema) : undefined;
   const session = await mutate(async () => {
     const previous = await sessionOr404(req.params.id);
     const value = await readSession(req.body, previous);
     if (value.status === 'archived' || previous.status === 'archived'
       || (previous.status === 'published' && value.status === 'draft')) requireArchivePermission(req);
     await saveSessionAndNotice(value, previous);
+    if (clip !== undefined) await cinema.persistCinema(value.id, clip);
+    await engagement.record({ kind: 'admin.session-update', admin: req.admin, session: value, detail: value.status });
+    value.cinema = await cinema.readForSession(value.id);
     return value;
   });
   push.wake();
@@ -588,10 +610,11 @@ api.post('/sessions/:id/vote', auth.requireStudent, async (req, res) => {
   const option = activity?.options.find(item => item.id === req.body?.optionId);
   requireThat(option, 400, 'Choisissez une activité et une réponse valides.');
   const result = await db.prepare(`
-    INSERT INTO votes (sessionId, participant, activityId, optionId, optionLabel)
-    VALUES (?, ?, ?, ?, ?) ON CONFLICT (sessionId, participant) DO NOTHING
-  `).run(session.id, 'student:' + req.student.id, activity.id, option.id, option.label);
+    INSERT INTO votes (sessionId, participant, activityId, optionId, optionLabel,created_at)
+    VALUES (?, ?, ?, ?, ?,?) ON CONFLICT (sessionId, participant) DO NOTHING
+  `).run(session.id, 'student:' + req.student.id, activity.id, option.id, option.label, new Date().toISOString());
   requireThat(result.changes > 0, 409, 'Votre vote a déjà été enregistré.');
+  await engagement.record({ kind: 'vote', student: req.student, session, detail: `${activity.name} · ${option.label}` });
   });
   res.status(201).json({ ok: true });
 });
@@ -608,6 +631,7 @@ api.post('/sessions/:id/feedback', auth.requireStudent, async (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, participant) DO NOTHING
   `).run(randomUUID(), session.id, 'student:' + req.student.id, rating, comment, new Date().toISOString());
   requireThat(result.changes > 0, 409, 'Votre avis a déjà été enregistré.');
+  await engagement.record({ kind: 'feedback', student: req.student, session, detail: `${rating}/5 · ${comment}` });
   });
   res.status(201).json({ ok: true });
 });
@@ -620,15 +644,16 @@ api.post('/sessions/:id/guess', auth.requireStudent, async (req, res) => {
   const activityId = req.body?.activityId;
   requireThat((await allowedGuesses()).some(activity => activity.id === activityId), 400, 'Choisissez une activité proposée.');
   const result = await db.prepare(`
-    INSERT INTO guesses (sessionId, participant, activityId)
-    VALUES (?, ?, ?) ON CONFLICT (sessionId, participant) DO NOTHING
-  `).run(session.id, 'student:' + req.student.id, activityId);
+    INSERT INTO guesses (sessionId, participant, activityId,created_at)
+    VALUES (?, ?, ?,?) ON CONFLICT (sessionId, participant) DO NOTHING
+  `).run(session.id, 'student:' + req.student.id, activityId, new Date().toISOString());
   requireThat(result.changes > 0, 409, 'Votre proposition a déjà été enregistrée.');
+  await engagement.record({ kind: 'guess', student: req.student, session, detail: (await findActivity(activityId)).name });
   });
   res.status(201).json({ ok: true });
 });
 
-async function resultsFor(session) {
+async function resultsFor(session, includeIdentity = false) {
   const grouped = await db.prepare(`
     SELECT activityId, optionId, MIN(optionLabel) AS optionLabel, COUNT(*) AS count FROM votes
     WHERE sessionId = ? GROUP BY activityId, optionId
@@ -649,11 +674,14 @@ async function resultsFor(session) {
     SELECT id, rating, comment, createdAt, hidden FROM feedback WHERE sessionId = ? ORDER BY createdAt DESC
   `).all(session.id)).map(item => ({ ...item, hidden: Boolean(item.hidden) }));
   const guesses = (await db.prepare('SELECT COUNT(*) AS count FROM guesses WHERE sessionId = ?').get(session.id)).count;
-  return { votes, feedback, guesses };
+  const responses = includeIdentity ? await db.prepare(`SELECT kind,actor_name AS name,actor_email AS email,
+    created_at AS createdAt,detail FROM user_actions WHERE session_id=? AND kind IN ('vote','feedback','guess')
+    ORDER BY CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,created_at DESC`).all(session.id) : [];
+  return { votes, feedback, guesses, responses };
 }
 
 api.get('/admin/sessions/:id/results', async (req, res) => {
-  res.json(await resultsFor(await sessionOr404(req.params.id)));
+  res.json(await resultsFor(await sessionOr404(req.params.id), req.admin.capabilities.includes('trace')));
 });
 
 api.put('/admin/sessions/:id/feedback/:feedbackId', auth.requireAdmin('moderate'), async (req, res) => {
@@ -662,6 +690,8 @@ api.put('/admin/sessions/:id/feedback/:feedbackId', auth.requireAdmin('moderate'
   const result = await db.prepare('UPDATE feedback SET hidden = ? WHERE sessionId = ? AND id = ?')
     .run(Number(hidden), req.params.id, req.params.feedbackId);
   requireThat(result.changes > 0, 404, 'Avis introuvable.');
+  await engagement.record({ kind: 'admin.feedback-moderation', admin: req.admin,
+    session: await sessionOr404(req.params.id), detail: hidden ? 'Avis masqué' : 'Avis rétabli' });
   res.json({ hidden });
 });
 
@@ -733,6 +763,8 @@ async function exportExcel(session, results) {
     results.votes.flatMap(activity => activity.options.map(option => [activity.name, option.label, option.count])));
   exportSheet(workbook, 'Avis', [['Date', 22], ['Note sur 5', 14], ['Commentaire', 74], ['Statut', 15]],
     results.feedback.map(item => [timeFormat.format(new Date(item.createdAt)), item.rating, item.comment, item.hidden ? 'Masqué' : 'Visible']));
+  exportSheet(workbook, 'Participations', [['Nom', 30], ['E-mail', 38], ['Action', 22], ['Date', 28], ['Réponse', 74]],
+    results.responses.map(item => [item.name, item.email, item.kind, item.createdAt ? timeFormat.format(new Date(item.createdAt)) : 'Date historique inconnue', item.detail]));
   return workbook.xlsx.writeBuffer();
 }
 
@@ -761,6 +793,8 @@ async function exportWord(session, results) {
       for (const line of item.comment.split(/\r?\n/)) paragraphs.push(reportText(line));
     }
   }
+  paragraphs.push(reportText('Traçabilité des participations', HeadingLevel.HEADING_1));
+  for (const item of results.responses) paragraphs.push(reportText(`${item.name} · ${item.email} · ${item.kind} · ${item.createdAt ? timeFormat.format(new Date(item.createdAt)) : 'Date historique inconnue'} · ${item.detail}`));
   return Packer.toBuffer(new Document({ creator: 'UATM GASA', title: session.title, sections: [{ children: paragraphs }] }));
 }
 
@@ -768,7 +802,7 @@ api.get('/admin/sessions/:id/export/:format', auth.requireAdmin('export'), async
   const session = await sessionOr404(req.params.id);
   const { format } = req.params;
   requireThat(['xlsx', 'docx'].includes(format), 404, 'Format d’export introuvable.');
-  const results = await resultsFor(session);
+  const results = await resultsFor(session, true);
   const report = format === 'xlsx' ? await exportExcel(session, results) : await exportWord(session, results);
   res.attachment(`gasa-bilan-${session.id}.${format}`).send(Buffer.from(report));
 });
@@ -795,13 +829,13 @@ app.use('/images', express.static(resolve(root, 'images')));
 app.use('/videos', express.static(resolve(root, 'videos')));
 app.get(['/', '/index.html', '/mainpage.html'], (_req, res) => res.sendFile(resolve(root, 'index.html')));
 app.get(['/admin', '/admin.html'], (_req, res) => res.sendFile(resolve(root, 'admin.html')));
-for (const file of ['style.css', 'student-themes.css', 'student-polls.css', 'script.js', 'student-interface.js', 'admin.css', 'admin.js']) {
+for (const file of ['style.css', 'student-themes.css', 'student-polls.css', 'script.js', 'student-interface.js', 'account-recovery.css', 'priority-survey.js', 'priority-survey.css', 'student-cinema.js', 'student-cinema.css', 'admin.css', 'admin.js']) {
   app.get(`/${file}`, (_req, res) => res.sendFile(resolve(root, file)));
 }
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
-  if (error instanceof RequestError || error instanceof AccountError) return res.status(error.status).json({ error: error.message });
+  if (error instanceof RequestError || error instanceof AccountError || error instanceof EngagementError) return res.status(error.status).json({ error: error.message });
   if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Le contenu est trop volumineux.' });
   if (error.type === 'entity.parse.failed') return res.status(400).json({ error: 'Le formulaire est invalide.' });
   if (error.status === 404) return res.status(404).json({ error: 'Ressource introuvable.' });
@@ -816,7 +850,7 @@ let closing;
 function close() {
   return closing ||= (async () => {
     await new Promise((resolveClose, reject) => server.close(error => error ? reject(error) : resolveClose()));
-    auth.close();
+    await auth.close();
     await push.stop();
     await db.close();
   })();

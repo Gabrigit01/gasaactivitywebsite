@@ -1,0 +1,45 @@
+/* Password controls share the account dialog's theme and stay scoped to it. */
+#student-dialog [hidden] { display: none !important; }
+#student-recovery-form, #student-recovery-form label { display: grid; gap: 7px; }
+#student-recovery-form { gap: 14px; }
+#student-recovery-form label { font-size: .88rem; font-weight: 650; }
+#student-recovery-form input {
+  min-width: 0;
+  width: 100%;
+  min-height: 45px;
+  padding: 9px 12px;
+  border: 1px solid var(--field-line, #ffffff4f);
+  border-radius: 9px;
+  background: var(--field, #0a0c12);
+  color: var(--text);
+  font: inherit;
+}
+#student-dialog input:focus-visible, #student-dialog button:focus-visible {
+  outline: 3px solid var(--amber, #f8be5c);
+  outline-offset: 3px;
+}
+#student-dialog .student-password-link {
+  justify-self: start;
+  min-height: 44px;
+  padding: 7px 0;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font: inherit;
+  font-size: .88rem;
+  cursor: pointer;
+}
+#student-dialog #student-password-change { margin: 8px 8px 8px 0; }
+#student-dialog .student-account-status {
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--text);
+  background: var(--green-bg, var(--surface));
+  font-size: .9rem;
+  line-height: 1.5;
+}
+#student-dialog button:disabled { opacity: .65; cursor: wait; }

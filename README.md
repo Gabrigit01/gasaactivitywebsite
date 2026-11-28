@@ -17,7 +17,7 @@ npm start
 
 Renseigner les trois identifiants et mots de passe du comité dans `.env`. Pour un essai local avec un seul accès responsable, la variable historique `ADMIN_PASSWORD` reste disponible lorsque les comptes nominatifs sont vides.
 
-L’accueil propose les thèmes **Clair** et **Sombre**, avec un bouton lune ou soleil dans la navigation. Le thème clair est utilisé à la première visite et le navigateur mémorise ensuite le choix. Voter, donner un avis ou proposer une réponse en mode surprise demande un compte étudiant. Les réponses sont limitées à une par compte, par formulaire et par séance, même sur plusieurs appareils. Le nom et l’e-mail ne figurent pas dans les avis du tableau de bord ou dans les exports. Un code d’inscription partagé peut être défini avec `STUDENT_SIGNUP_CODE`. Il contrôle l’accès à l’inscription. La création de compte ne valide pas l’adresse e-mail auprès de l’établissement.
+L’accueil propose les thèmes **Clair** et **Sombre**, avec un bouton lune ou soleil dans la navigation. Le thème clair est utilisé à la première visite et le navigateur mémorise ensuite le choix. Voter, donner un avis ou proposer une réponse en mode surprise demande un compte étudiant. Les réponses sont limitées à une par compte, par formulaire et par séance, même sur plusieurs appareils. Le nom, l’e-mail, la réponse et sa date sont consultables par les membres autorisés du comité ; ces informations ne sont jamais affichées publiquement. Un code d’inscription partagé peut être défini avec `STUDENT_SIGNUP_CODE`. Il contrôle l’accès à l’inscription. La création de compte ne valide pas l’adresse e-mail auprès de l’établissement.
 
 ## Accès du comité
 
@@ -25,11 +25,31 @@ Les trois identifiants et leurs mots de passe sont distincts. Chaque mot de pass
 
 | Rôle | Droits |
 | --- | --- |
-| Responsable | Organisation, modération, QR codes, exports, archivage et retrait de publication |
-| Organisateur | Gestion des activités et sondages, publication, modération et QR codes |
-| Lecteur | Consultation du tableau de bord et des résultats |
+| Responsable | Organisation, modération, QR codes, exports, archivage, traçabilité et dates de naissance facultatives |
+| Organisateur | Gestion des activités et sondages, publication, modération, QR codes et participations nominatives |
+| Lecteur | Consultation du tableau de bord, des résultats et des avis sans identités |
 
 Les sessions sont renouvelées lors de l’utilisation et conservées en base après redémarrage. Leur durée d’inactivité maximale est d’un an pour les étudiants et de 180 jours pour le comité. Se déconnecter révoque la session de cet appareil.
+
+## Mot de passe étudiant
+
+Le lien « Mot de passe oublié » envoie un lien personnel valable 30 minutes, utilisable une seule fois. Changer son mot de passe depuis son compte demande le mot de passe actuel. Les deux opérations ferment les sessions existantes sur tous les appareils. Les accès administrateurs restent définis par les variables `ADMIN_*` de Render.
+
+Configurer l’expéditeur dans les variables Render : `SMTP_HOST`, `SMTP_PORT` (587 avec STARTTLS ou 465 avec `SMTP_SECURE=true`), `SMTP_SECURE`, `SMTP_FROM` (adresse e-mail autorisée par le fournisseur), `SMTP_USER` et `SMTP_PASSWORD`. Les deux derniers paramètres sont fournis ensemble si le service demande une authentification. Conserver l’origine HTTPS du site dans `PUBLIC_URL`, ou utiliser l’adresse Render détectée automatiquement. Sans service SMTP configuré, l’interface indique explicitement que la récupération par e-mail est indisponible. Aucun lien secret n’est affiché dans les réponses API ou les journaux.
+
+## Sondage de fréquence et gestion quotidienne
+
+La rubrique « Fréquence et jour » pilote la consultation prioritaire, active par défaut au premier démarrage de cette version. Elle propose « Chaque semaine » ou « Toutes les deux semaines », puis un jour du lundi au dimanche. La fenêtre apparaît à l’ouverture pour les étudiants qui n’ont pas encore répondu ; elle peut être fermée et reste accessible dans la page. Chaque compte ne peut répondre qu’une fois. Le comité peut modifier les textes, suspendre, reprendre ou arrêter la collecte sans supprimer les réponses.
+
+La date de naissance est facultative. Sa collecte reste désactivée tant que le responsable n’a pas précisé son utilisation dans les paramètres du sondage. Si elle est activée, l’étudiant voit cette explication et doit donner son accord pour partager sa date. Les étudiants ayant déjà répondu peuvent l’ajouter ensuite sans voter une deuxième fois, tant que la collecte reste ouverte. Un changement d’utilisation exige un nouvel accord. Seul le responsable peut consulter ces dates et les exporter. Les réponses, dates et identités sont accessibles dans « Participations » ; la date des anciens votes qui ne la stockaient pas reste inconnue, elle n’est pas reconstituée artificiellement.
+
+Le catalogue permet de créer/modifier chaque activité, son image, sa question et 2 à 8 choix de réponse. Les images JPEG, PNG ou WebP de moins de 5 Mo peuvent être importées depuis l’ordinateur ; elles sont conservées dans la base et survivent aux mises à jour Render. Les nouvelles séances proposent toutes les activités actives ; le comité choisit celles qu’il souhaite inclure. Le sondage d’une séance et ses avis ont des commandes d’ouverture/fermeture séparées.
+
+## Suite d’une séance cinéma
+
+Depuis une séance, le comité peut publier un extrait de fin de film et un lien facultatif vers le film intégral. L’extrait est un fichier MP4 directement accessible en HTTPS, hébergé sur un service vidéo ou de fichiers prenant en charge les requêtes HTTP Range (réponses 206, sans redirection). Sa durée réelle est vérifiée côté serveur ; au-delà de 30 minutes, la publication est refusée. La durée indiquée par le navigateur n’est pas utilisée comme preuve. La lecture de l’extrait demande un compte étudiant et la séance doit être publiée.
+
+Les vidéos longues ne sont pas stockées dans PostgreSQL ni dans le disque temporaire de Render : le formulaire attend l’URL du fichier hébergé. Le comité peut désactiver, modifier ou retirer l’extrait. Le lien vers le film complet est indépendant et peut pointer vers une page de visionnage.
 
 ## Notifications
 

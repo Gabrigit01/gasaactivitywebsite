@@ -87,11 +87,20 @@ for (const dialect of ['sqlite', 'postgres']) {
     visitor.cookies.set('gasa_participant', token);
     await db.prepare('INSERT INTO votes (sessionId, participant, activityId, optionId, optionLabel) VALUES (?, ?, ?, ?, ?)')
       .run('prochaine-seance', legacy, 'cinema', 'option-1', 'Documentaire & innovation');
+    const historicActionId = 'historique-votes-prochaine-seance-' + legacy;
+    await db.prepare(`INSERT INTO user_actions (id,kind,student_id,actor_name,actor_email,actor_type,session_id,session_title,detail,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(historicActionId, 'vote', null, 'Participant historique', '', 'student',
+        'prochaine-seance', 'La prochaine séance', 'Documentaire & innovation', null);
     assert.equal((await visitor.request('/api/home')).data.poll.responded, false, 'un invité ne reçoit pas une confirmation historique');
     const register = await visitor.request('/api/student/register', {
       method: 'POST', body: { name: 'Étudiant Test', email: 'student-test@example.test', password: 'student-test-password-2026' },
     });
     assert.equal(register.status, 201);
+    const historicalTrace = await db.prepare('SELECT actor_name,actor_email,created_at,student_id FROM user_actions WHERE id=?').get(historicActionId);
+    assert.equal(historicalTrace.actor_name, 'Étudiant Test');
+    assert.equal(historicalTrace.actor_email, 'student-test@example.test');
+    assert.equal(historicalTrace.student_id, register.data.student.id);
+    assert.equal(historicalTrace.created_at, null, 'la migration conserve la date inconnue des anciennes réponses');
     assert.ok(register.headers.getSetCookie().some(cookie => cookie.includes('__Host-gasa_student=') && cookie.includes('Secure') && cookie.includes('HttpOnly')));
     assert.equal((await visitor.request('/api/home')).data.poll.responded, true, 'migration après connexion seulement');
     assert.equal((await visitor.request('/api/sessions/projection-campus/feedback', {
