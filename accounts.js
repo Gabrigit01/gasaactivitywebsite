@@ -94,7 +94,7 @@ function readAdminConfig(production) {
   return { accounts, legacy: false };
 }
 
-export async function installAccounts({ api, db, production, onStudentAuthenticated, onAccountEvent, publicOrigin, sendEmail }) {
+export async function installAccounts({ api, db, production, onStudentAuthenticated, onStudentRegistered, onAccountEvent, publicOrigin, sendEmail }) {
   const { accounts, legacy } = readAdminConfig(production);
   const signupCode = process.env.STUDENT_SIGNUP_CODE?.trim() || '';
   const signupCodeHash = signupCode ? digest(signupCode) : null;
@@ -423,6 +423,7 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
     await db.transaction(async () => {
       const result = await insertStudent.run(id, email, name, salt, hash, new Date().toISOString());
       requireAccount(result.changes > 0, 409, 'Un compte utilise déjà cette adresse. Connectez-vous avec votre mot de passe.');
+      await onStudentRegistered?.(account, req.body);
       await signInStudent(req, res, account, null, 'student.register');
     });
     res.status(201).json(studentPayload(account));
@@ -537,6 +538,31 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
   });
 
   api.get('/admin/session', async (req, res) => res.json(adminPayload(await admin(req, res))));
+  api.get('/admin/system-status', requireAdmin('archive'), (_req, res) => res.json({
+    version: '2026.11.28.2', passwordRecovery: { enabled: passwordRecoveryEnabled,
+      missing: [!process.env.SMTP_HOST && 'SMTP_HOST', !process.env.SMTP_FROM && 'SMTP_FROM',
+        !configuredPasswordOrigin && production && 'PUBLIC_URL'].filter(Boolean) },
+    storage: { media: 'Base de données persistante', imageLimitMB: 5, videoLimitMB: 50 },
+  }));
+  api.post('/admin/students/:id/password-reset', requireAdmin('archive'), async (req, res) => {
+    limit(req, res, 'admin-password-link', 30);
+    const origin = recoveryOrigin(req);
+    requireAccount(origin, 503, 'Configurez le domaine public du site pour créer un lien.');
+    const account = await studentById.get(req.params.id);
+    requireAccount(account, 404, 'Compte étudiant introuvable.');
+    const token = randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + passwordResetDuration;
+    await db.transaction(async () => {
+      await lockStudent.run(account.id);
+      await passwordResets.revoke.run(account.id);
+      await passwordResets.create.run(storedToken(token), account.id, expiresAt);
+      await onAccountEvent?.({ kind: 'admin.password-link', admin: req.admin,
+        studentId: account.id, name: account.name, email: account.email });
+    });
+    const url = new URL('/', origin);
+    url.searchParams.set('reset', token);
+    res.set('Cache-Control', 'no-store').status(201).json({ url: url.href, expiresAt: new Date(expiresAt).toISOString() });
+  });
 
   api.post('/admin/login', async (req, res) => {
     requireAccount(adminUsers.size, 503, 'Configurez les comptes du comité avant de vous connecter.');

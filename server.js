@@ -11,6 +11,8 @@ import { AccountError, installAccounts } from './accounts.js';
 import { createPush } from './push.js';
 import { EngagementError, installEngagement } from './engagement.js';
 import { installCinema } from './cinema.js';
+import { DirectoryError, installDirectory } from './student-directory.js';
+import { GalleryError, installGallery } from './gallery.js';
 
 export async function createApplication({ database, sendEmail } = {}) {
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -418,10 +420,15 @@ async function migrateBrowserResponses(req, res, student) {
 }
 
 let engagement;
+let directory;
 const auth = await installAccounts({ api, db, production, publicOrigin, sendEmail,
+  onStudentRegistered: (student, body) => body.programId !== undefined || body.studyYear !== undefined
+    ? directory.saveAcademicProfile(student.id, body, student) : undefined,
   onStudentAuthenticated: migrateBrowserResponses,
   onAccountEvent: event => engagement?.recordAccountEvent(event) });
+directory = await installDirectory({ api, db, auth, mutate, record: event => engagement?.record(event) });
 engagement = await installEngagement({ app, api, db, auth, mutate });
+await installGallery({ app, api, db, auth, mutate, record: engagement.record });
 const cinema = await installCinema({ api, db, auth, publicOrigin, mutate, onChange: event => engagement.record(event) });
 const push = await createPush({ db });
 push.mount(api);
@@ -671,7 +678,10 @@ async function resultsFor(session, includeIdentity = false) {
     return { activityId, name: activity.name, count, options: [...options.values()] };
   }));
   const feedback = (await db.prepare(`
-    SELECT id, rating, comment, createdAt, hidden FROM feedback WHERE sessionId = ? ORDER BY createdAt DESC
+    SELECT f.id, f.rating, f.comment, f.createdAt, f.hidden
+    ${includeIdentity ? ',p.id AS studentId,p.name,p.email' : ''}
+    FROM feedback f ${includeIdentity ? "LEFT JOIN student_accounts p ON f.participant='student:'||p.id" : ''}
+    WHERE f.sessionId = ? ORDER BY f.createdAt DESC
   `).all(session.id)).map(item => ({ ...item, hidden: Boolean(item.hidden) }));
   const guesses = (await db.prepare('SELECT COUNT(*) AS count FROM guesses WHERE sessionId = ?').get(session.id)).count;
   const responses = includeIdentity ? await db.prepare(`SELECT kind,actor_name AS name,actor_email AS email,
@@ -814,7 +824,7 @@ api.use((_req, res) => {
 app.get('/healthz', async (_req, res) => {
   try {
     await db.prepare('SELECT 1').get();
-    res.json({ ok: true });
+    res.json({ ok: true, version: '2026.11.28.2' });
   } catch {
     res.status(503).json({ ok: false });
   }
@@ -835,7 +845,7 @@ for (const file of ['style.css', 'student-themes.css', 'student-polls.css', 'scr
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
-  if (error instanceof RequestError || error instanceof AccountError || error instanceof EngagementError) return res.status(error.status).json({ error: error.message });
+  if (error instanceof RequestError || error instanceof AccountError || error instanceof EngagementError || error instanceof DirectoryError || error instanceof GalleryError) return res.status(error.status).json({ error: error.message });
   if (error.type === 'entity.too.large') return res.status(413).json({ error: 'Le contenu est trop volumineux.' });
   if (error.type === 'entity.parse.failed') return res.status(400).json({ error: 'Le formulaire est invalide.' });
   if (error.status === 404) return res.status(404).json({ error: 'Ressource introuvable.' });

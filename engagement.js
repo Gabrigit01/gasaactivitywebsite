@@ -10,6 +10,7 @@ export class EngagementError extends Error {
 const need = (condition, message, status = 400) => { if (!condition) throw new EngagementError(status, message); };
 const text = (value, maximum = 300) => typeof value === 'string' ? value.trim().slice(0, maximum) : '';
 const frequencies = [{ value: 'weekly', label: 'Chaque semaine' }, { value: 'fortnightly', label: 'Toutes les deux semaines' }];
+const birthdayPurpose = 'Préparer les anniversaires et organiser des célébrations individuelles ou groupées. Les publications d’anniversaire sont facultatives et font l’objet d’un accord distinct ; l’année de naissance n’est jamais publiée.';
 const weekdays = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'].map((label, index) => ({
   value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'][index], label,
 }));
@@ -58,6 +59,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
   `);
   await addColumn(db, 'votes', 'created_at', 'TEXT');
   await addColumn(db, 'guesses', 'created_at', 'TEXT');
+  await addColumn(db, 'student_profiles', 'publication_consent', 'INTEGER NOT NULL DEFAULT 0');
 
   await write(async () => {
     if (!await db.prepare('SELECT id FROM priority_surveys LIMIT 1').get()) {
@@ -66,7 +68,12 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
         .run('rythme-des-activites', 'Organisons nos prochaines activités',
           'À quelle fréquence souhaitez-vous nos activités ?',
           'Votre rythme, votre jour. Aidez le comité à préparer les prochaines séances.',
-          'active', 0, '', new Date().toISOString());
+          'active', 1, birthdayPurpose, new Date().toISOString());
+    }
+    if (!await db.prepare("SELECT value FROM schema_settings WHERE name='birthday-purpose-v1'").get()) {
+      await db.prepare("UPDATE priority_surveys SET collect_birthdate=1,birthdate_purpose=? WHERE birthdate_purpose='' AND collect_birthdate=0")
+        .run(birthdayPurpose);
+      await db.prepare("INSERT INTO schema_settings (name,value) VALUES ('birthday-purpose-v1',1) ON CONFLICT (name) DO NOTHING").run();
     }
   });
 
@@ -74,7 +81,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
     await db.prepare(`INSERT INTO user_actions
       (id,kind,student_id,actor_name,actor_email,actor_type,session_id,session_title,detail,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (id) DO NOTHING`)
-      .run(id, kind, student?.id || null, student?.name || admin?.username || 'Participant historique',
+      .run(id, kind, student?.id || null, admin?.username || student?.name || 'Participant historique',
         student?.email || '', admin ? 'admin' : 'student', session?.id || null, session?.title || '', detail, createdAt);
   }
 
@@ -115,11 +122,12 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
       && birthdate >= '1900-01-01' && date.getTime() <= Date.now(), 'Indiquez une date de naissance valide.');
   }
 
-  async function storeBirthdate(survey, student, birthdate, createdAt) {
-    await db.prepare(`INSERT INTO student_profiles (student_id,birthdate,birthdate_purpose,consented_at) VALUES (?,?,?,?)
+  async function storeBirthdate(survey, student, birthdate, createdAt, publicationConsent) {
+    need(publicationConsent === undefined || typeof publicationConsent === 'boolean', 'Accord de publication invalide.');
+    await db.prepare(`INSERT INTO student_profiles (student_id,birthdate,birthdate_purpose,consented_at,publication_consent) VALUES (?,?,?,?,?)
       ON CONFLICT (student_id) DO UPDATE SET birthdate=excluded.birthdate,
-      birthdate_purpose=excluded.birthdate_purpose,consented_at=excluded.consented_at`)
-      .run(student.id, birthdate, survey.birthdatePurpose, createdAt);
+      birthdate_purpose=excluded.birthdate_purpose,consented_at=excluded.consented_at,publication_consent=excluded.publication_consent`)
+      .run(student.id, birthdate, survey.birthdatePurpose, createdAt, Number(publicationConsent === true));
     await record({ kind: 'student.birthdate-share', student, detail: survey.birthdatePurpose, createdAt });
   }
 
@@ -150,7 +158,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
         .run(randomUUID(), survey.id, req.student.id, frequency, weekday, createdAt);
       need(result.changes > 0, 'Votre participation à ce sondage est déjà enregistrée.', 409);
       if (birthdate) {
-        await storeBirthdate(survey, req.student, birthdate, createdAt);
+        await storeBirthdate(survey, req.student, birthdate, createdAt, req.body.publicationConsent);
       }
       await record({ kind: 'priority-survey', student: req.student,
         detail: `${frequencies.find(item => item.value === frequency).label} · ${weekdays.find(item => item.value === weekday).label}`, createdAt });
@@ -166,7 +174,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
       need(await db.prepare('SELECT 1 FROM priority_responses WHERE survey_id=? AND student_id=?').get(survey.id, req.student.id),
         'Répondez d’abord au sondage de fréquence.', 409);
       validateBirthdate(survey, req.body);
-      await storeBirthdate(survey, req.student, req.body.birthdate, new Date().toISOString());
+      await storeBirthdate(survey, req.student, req.body.birthdate, new Date().toISOString(), req.body.publicationConsent);
     });
     res.status(201).json({ ok: true });
   });
@@ -247,16 +255,70 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
       .all(...values, pageSize, (page - 1) * pageSize);
     res.json({ items, total, page, pageSize });
   });
-  api.get('/admin/students', auth.requireAdmin('trace'), async (req, res) => {
+  async function studentList(req, all = false) {
     const { page, pageSize, q } = pageInput(req);
-    const where = q ? ' WHERE LOWER(s.name) LIKE ? OR LOWER(s.email) LIKE ?' : '';
-    const values = q ? ['%' + q + '%', '%' + q + '%'] : [];
-    const total = (await db.prepare('SELECT COUNT(*) AS count FROM student_accounts s' + where).get(...values)).count;
+    const conditions = [], values = [];
+    if (q) { conditions.push('(LOWER(s.name) LIKE ? OR LOWER(s.email) LIKE ?)'); values.push('%'+q+'%', '%'+q+'%'); }
+    if (req.query.programId) { conditions.push('a.program_id=?'); values.push(text(req.query.programId,80)); }
+    if (req.query.studyYear) {
+      need(['1','2','3'].includes(req.query.studyYear), 'Année de licence invalide.');
+      conditions.push('a.study_year=?'); values.push(Number(req.query.studyYear));
+    }
+    if (req.query.birthMonth) {
+      need(canBirthdate(req), 'Ce filtre est réservé au responsable.', 403);
+      need(/^(0?[1-9]|1[0-2])$/.test(req.query.birthMonth), 'Mois de naissance invalide.');
+      conditions.push('SUBSTR(p.birthdate,6,2)=?'); values.push(String(Number(req.query.birthMonth)).padStart(2,'0'));
+    }
+    if (req.query.publicationConsent) {
+      need(canBirthdate(req), 'Ce filtre est réservé au responsable.', 403);
+      need(['true','false'].includes(req.query.publicationConsent), 'Accord de publication invalide.');
+      conditions.push('COALESCE(p.publication_consent,0)=?'); values.push(Number(req.query.publicationConsent==='true'));
+    }
+    for (const [key,operator] of [['from','>='],['to','<=']]) if (req.query[key]) {
+      need(/^\d{4}-\d{2}-\d{2}$/.test(req.query[key]), 'Période invalide.');
+      conditions.push('s.created_at '+operator+' ?'); values.push(req.query[key]+(key==='from'?'T00:00:00.000Z':'T23:59:59.999Z'));
+    }
+    if (req.params.id) { conditions.push('s.id=?'); values.push(req.params.id); }
+    const joins = ` FROM student_accounts s LEFT JOIN academic_profiles a ON a.student_id=s.id
+      LEFT JOIN study_programs program ON program.id=a.program_id ${canBirthdate(req)?'LEFT JOIN student_profiles p ON p.student_id=s.id':''}`;
+    const where = conditions.length ? ' WHERE '+conditions.join(' AND ') : '';
+    const total = (await db.prepare('SELECT COUNT(*) AS count'+joins+where).get(...values)).count;
     const items = await db.prepare(`SELECT s.id,s.name,s.email,s.created_at AS createdAt
-      ${canBirthdate(req) ? ',p.birthdate,p.birthdate_purpose AS birthdatePurpose,p.consented_at AS consentedAt' : ''}
-      FROM student_accounts s ${canBirthdate(req) ? 'LEFT JOIN student_profiles p ON p.student_id=s.id' : ''}
-      ${where} ORDER BY s.name,s.id LIMIT ? OFFSET ?`).all(...values, pageSize, (page - 1) * pageSize);
-    res.json({ items, total, page, pageSize });
+      ,a.first_name AS firstName,a.last_name AS lastName,a.program_id AS programId,program.name AS programName,a.study_year AS studyYear,
+      (SELECT COUNT(*) FROM votes v WHERE v.participant='student:'||s.id) AS voteCount,
+      (SELECT COUNT(*) FROM feedback f WHERE f.participant='student:'||s.id) AS feedbackCount,
+      (SELECT COUNT(*) FROM user_actions u WHERE u.student_id=s.id AND u.kind='student.login') AS loginCount,
+      (SELECT MAX(u.created_at) FROM user_actions u WHERE u.student_id=s.id AND u.kind IN ('student.login','student.register')) AS lastLoginAt
+      ${canBirthdate(req) ? ',p.birthdate,p.birthdate_purpose AS birthdatePurpose,p.consented_at AS consentedAt,p.publication_consent AS publicationConsent' : ''}
+      ${joins} ${where} ORDER BY s.name,s.id ${all?'':'LIMIT ? OFFSET ?'}`)
+      .all(...values,...(all?[]:[pageSize,(page-1)*pageSize]));
+    return { items:items.map(({voteCount,feedbackCount,loginCount,...row})=>({...row,
+      ...(canBirthdate(req)?{publicationConsent:row.birthdate?Boolean(row.publicationConsent):null}:{}),
+      counts:{votes:voteCount,feedback:feedbackCount,logins:loginCount}})),total,page,pageSize };
+  }
+  api.get('/admin/students', auth.requireAdmin('trace'), async (req,res)=>res.json(await studentList(req)));
+  api.get('/admin/students/export/:format', auth.requireAdmin('export'), async (req,res)=>{
+    need(['xlsx','docx'].includes(req.params.format),'Format introuvable.',404);
+    const {items} = await studentList(req,true);
+    const headings=['Nom complet','Prénom','Nom','E-mail','Filière actuelle','Licence','Inscription','Dernière connexion','Votes','Avis','Connexions','Naissance','Publications autorisées','Accord donné le','Utilisation annoncée'];
+    const rows=items.map(s=>[s.name,s.firstName||'',s.lastName||'',s.email,s.programName||'',s.studyYear||'',s.createdAt||'',s.lastLoginAt||'',s.counts.votes,s.counts.feedback,s.counts.logins,s.birthdate||'',s.publicationConsent?'Oui':'Non',s.consentedAt||'',s.birthdatePurpose||'']);
+    if(req.params.format==='xlsx') {
+      const book=new ExcelJS.Workbook(), sheet=book.addWorksheet('Étudiants'); sheet.addRow(headings);sheet.addRows(rows);sheet.getRow(1).font={bold:true};sheet.columns.forEach(c=>{c.width=25;});
+      res.attachment('gasa-etudiants.xlsx').send(Buffer.from(await book.xlsx.writeBuffer()));
+    } else {
+      const children=[new Paragraph({text:'Annuaire étudiant',heading:HeadingLevel.TITLE})];
+      rows.forEach(row=>{children.push(new Paragraph({text:String(row[0]),heading:HeadingLevel.HEADING_2}));row.forEach((value,i)=>{if(i&&value!=='')children.push(new Paragraph(headings[i]+' : '+value));});});
+      res.attachment('gasa-etudiants.docx').send(await Packer.toBuffer(new Document({sections:[{children}]})));
+    }
+  });
+  api.get('/admin/students/:id', auth.requireAdmin('trace'), async (req,res)=>{
+    const {items}=await studentList(req,true);need(items.length,'Compte étudiant introuvable.',404);
+    const {page,pageSize}=pageInput(req);
+    const total=(await db.prepare('SELECT COUNT(*) AS count FROM user_actions WHERE student_id=?').get(req.params.id)).count;
+    const actions=await db.prepare(`SELECT id,kind,session_id AS sessionId,session_title AS sessionTitle,detail,created_at AS createdAt
+      FROM user_actions WHERE student_id=? ORDER BY CASE WHEN created_at IS NULL THEN 1 ELSE 0 END,created_at DESC,id DESC LIMIT ? OFFSET ?`)
+      .all(req.params.id,pageSize,(page-1)*pageSize);
+    res.json({student:items[0],actions,total,page,pageSize});
   });
 
   let processingImage = false;
@@ -298,8 +360,8 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
   return { record, current, async recordAccountEvent(event) {
     const kind = event.kind;
     const student = event.student || (event.studentId ? { id: event.studentId, name: event.name || '', email: event.email || '' } : null);
-    await record({ kind, student, detail: { 'student.register': 'Inscription', 'student.login': 'Connexion',
+    await record({ kind, student, admin: event.admin, detail: { 'student.register': 'Inscription', 'student.login': 'Connexion',
       'student.logout': 'Déconnexion', 'student.password-reset': 'Mot de passe réinitialisé',
-      'student.password-change': 'Mot de passe modifié' }[kind] || kind });
+      'student.password-change': 'Mot de passe modifié', 'admin.password-link': 'Lien temporaire de réinitialisation généré par le responsable' }[kind] || kind });
   } };
 }

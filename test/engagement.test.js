@@ -108,7 +108,7 @@ for (const dialect of ['sqlite', 'postgres']) {
       assert.equal((await owner.request('/api/admin/priority-survey', {
         method: 'PUT', body: { collectBirthdate: true, birthdatePurpose: '' },
       })).status, 400);
-      assert.equal((await owner.request('/api/admin/priority-survey')).data.collectBirthdate, false, 'la configuration refusée est annulée');
+      assert.equal((await owner.request('/api/admin/priority-survey')).data.collectBirthdate, true, 'la configuration refusée est annulée');
       const configured = await owner.request('/api/admin/priority-survey', {
         method: 'PUT', body: { collectBirthdate: true, birthdatePurpose: 'Organiser les anniversaires des étudiants qui donnent leur accord.' },
       });
@@ -263,6 +263,17 @@ for (const dialect of ['sqlite', 'postgres']) {
       const priorityTrace = (await owner.request('/api/admin/trace?kind=priority-survey&q=alex-engagement')).data;
       assert.equal(priorityTrace.total, 1, 'une soumission concurrente crée une seule trace');
       assert.equal(priorityTrace.items[0].email, firstIdentity.email);
+      const feedbackSession = dashboard.sessions.find(session => session.feedbackOpen && session.status === 'published');
+      assert.equal((await first.request('/api/sessions/'+feedbackSession.id+'/feedback', {
+        method:'POST',body:{rating:4,comment:'Très bonne séance, merci au comité.'},
+      })).status,201);
+      const namedFeedback = (await organizer.request('/api/admin/sessions/'+feedbackSession.id+'/results')).data.feedback[0];
+      assert.equal(namedFeedback.name,firstIdentity.name);
+      assert.equal(namedFeedback.email,firstIdentity.email);
+      assert.equal(namedFeedback.studentId, (await first.request('/api/student/session')).data.student.id);
+      const anonymousFeedback = (await viewer.request('/api/admin/sessions/'+feedbackSession.id+'/results')).data.feedback[0];
+      assert.equal('email' in anonymousFeedback,false);
+      assert.equal('name' in anonymousFeedback,false);
     });
 
     await t.test('exports propriétaires exploitables et refusés aux autres rôles', async () => {

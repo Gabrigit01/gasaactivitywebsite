@@ -272,6 +272,17 @@ function cinemaFromRow(row) {
   } : null;
 }
 
+function announcementAllowsPlayback(value) {
+  if (!value) return true;
+  try {
+    const announcement = JSON.parse(value);
+    if (!announcement || typeof announcement !== 'object' || Array.isArray(announcement)
+      || typeof announcement.date !== 'string') return false;
+    const date = Date.parse(announcement.date);
+    return Number.isFinite(date) && date <= Date.now();
+  } catch { return false; }
+}
+
 export async function installCinema({
   api, db, auth, publicOrigin, probe = probeMp4Duration,
   mutate = work => db.transaction(work), onChange = async () => {},
@@ -328,10 +339,10 @@ export async function installCinema({
   }
 
   api.get('/cinema', async (_req, res) => {
-    const rows = await db.prepare(`SELECT c.*, s.title AS session_title FROM cinema_followups c
+    const rows = await db.prepare(`SELECT c.*, s.title AS session_title, s.announcement AS session_announcement FROM cinema_followups c
       JOIN sessions s ON s.id = c.session_id WHERE c.enabled = 1 AND s.status = 'published'
       ORDER BY c.updated_at DESC`).all();
-    res.set('Cache-Control', 'no-store').json({ items: rows.map(row => ({
+    res.set('Cache-Control', 'no-store').json({ items: rows.filter(row => announcementAllowsPlayback(row.session_announcement)).map(row => ({
       sessionId: row.session_id, title: row.title, sessionTitle: row.session_title,
       durationSeconds: Number(row.duration_seconds), available: true,
       ...(row.full_url ? { fullUrl: row.full_url } : {}),
@@ -339,8 +350,9 @@ export async function installCinema({
   });
 
   api.get('/sessions/:id/cinema', auth.requireStudent, async (req, res) => {
-    const session = await db.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'published'").get(req.params.id);
-    const cinema = session && await readForSession(session.id);
+    const session = await db.prepare("SELECT id, announcement FROM sessions WHERE id = ? AND status = 'published'").get(req.params.id);
+    if (!session || !announcementAllowsPlayback(session.announcement)) reject('Cet extrait n’est pas disponible.', 404);
+    const cinema = await readForSession(session.id);
     if (!cinema?.enabled) reject('Cet extrait n’est pas disponible.', 404);
     res.set('Cache-Control', 'private, no-store').json({ cinema });
   });

@@ -51,9 +51,9 @@
         <p>Connectez-vous pour gérer les séances du campus.</p>
         <form id="login-form" class="stack">
           <label id="admin-login-user">Identifiant <input type="text" name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="64"></label>
-          <label>Mot de passe <input type="password" name="password" required autocomplete="current-password"></label>
+          <div class="password-entry"><label for="admin-password">Mot de passe</label><div class="password-field"><input id="admin-password" type="password" name="password" required autocomplete="current-password"><button id="password-visibility" type="button" class="button ghost" aria-controls="admin-password" aria-pressed="false" aria-label="Afficher le mot de passe">Afficher</button></div></div>
           <p id="login-error" class="form-message error" role="alert" hidden></p>
-          <button type="submit" class="button primary">Se connecter <svg class="icon"><use href="#i-arrow"/></svg></button>
+          <button type="submit" class="button primary">Se connecter</button>
         </form>
         <a class="return-link" href="/mainpage.html">Retour au site étudiant <svg class="icon"><use href="#i-external"/></svg></a>
       </div>
@@ -71,8 +71,10 @@
         <a href="#vue" data-view="vue"><svg class="icon"><use href="#i-grid"/></svg><span>Vue d’ensemble</span></a>
         <a href="#prioritaire" data-view="prioritaire"><svg class="icon"><use href="#i-chart"/></svg><span>Sondage prioritaire</span></a>
         <a href="#sondages" data-view="sondages"><svg class="icon"><use href="#i-calendar"/></svg><span>Séances et sondages</span></a>
+        <a href="#cinema" data-view="cinema"><svg class="icon"><use href="#i-calendar"/></svg><span>Suite des films</span></a>
         <a href="#activites" data-view="activites"><svg class="icon"><use href="#i-grid"/></svg><span>Catalogue d’activités</span></a>
-        <a href="#participations" data-view="participations"><svg class="icon"><use href="#i-comment"/></svg><span>Participations et étudiants</span></a>
+        <a href="#mediatheque" data-view="mediatheque"><svg class="icon"><use href="#i-grid"/></svg><span>Médiathèque des séances</span></a>
+        <a href="#participations" data-view="participations"><svg class="icon"><use href="#i-comment"/></svg><span>Étudiants et participations</span></a>
         <a href="#parametres" data-view="parametres"><svg class="icon"><use href="#i-share"/></svg><span>Paramètres et diffusion</span></a>
       </nav>
       <div class="sidebar-footer">
@@ -95,11 +97,12 @@
       <div class="workspace">
         <div class="page-head">
           <div><h1 id="page-title">Vue d’ensemble</h1><p id="page-intro">Pilotez les séances et retrouvez les réponses des étudiants.</p></div>
-          <button id="new-button" type="button" class="button primary"><svg class="icon"><use href="#i-plus"/></svg><span id="new-button-label">Nouveau sondage</span></button>
+          <button id="new-button" type="button" class="button primary"><svg class="icon"><use href="#i-plus"/></svg><span id="new-button-label">Nouvelle séance</span></button>
         </div>
         <div id="session-bar" class="session-bar">
-          <label for="session-select"><svg class="icon"><use href="#i-calendar"/></svg> Séance</label>
-          <select id="session-select"></select>
+          <label for="session-select"><svg class="icon"><use href="#i-calendar"/></svg> Séance à gérer</label>
+          <select id="session-select" aria-describedby="session-help"></select>
+          <small id="session-help">Ce menu réunit les séances créées. Ajoutez une séance pour préparer un nouveau rendez-vous.</small>
         </div>
         <p id="app-message" class="form-message" role="status" aria-live="polite" hidden></p>
         <section id="content" aria-labelledby="page-title" aria-busy="true"></section>
@@ -120,6 +123,10 @@
         <button id="editor-submit" type="submit" class="button primary">Enregistrer</button>
       </div>
     </form>
+  </dialog>
+  <dialog id="student-card" aria-labelledby="student-card-title">
+    <div class="dialog-head"><h2 id="student-card-title">Fiche étudiante</h2><button id="student-card-close" type="button" class="button icon-button outline" aria-label="Fermer la fiche"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div id="student-card-content" class="dialog-body stack"></div>
   </dialog>
 </body>
 </html>

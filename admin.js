@@ -6,22 +6,13 @@ const views = {
   prioritaire: { title: "Sondage prioritaire", intro: "Quelle fréquence d’activités et quel jour conviennent aux étudiants ?" },
   sondages: { title: "Séances et sondages", intro: "Choisissez les activités, pilotez les votes et préparez chaque séance." },
   activites: { title: "Catalogue d’activités", intro: "Personnalisez les noms, descriptions, images et questions proposées aux étudiants." },
+  mediatheque: { title: "Médiathèque des séances", intro: "Ajoutez les photos et vidéos des séances pour les retrouver sur le site étudiant." },
+  cinema: { title: "Suite des films", intro: "Choisissez une séance, ajoutez son extrait de 30 minutes maximum et le lien du film complet." },
   participations: { title: "Participations et étudiants", intro: "Retrouvez qui a répondu, à quel sondage et à quel moment." },
   parametres: { title: "Paramètres et diffusion", intro: "Préparez les annonces, partagez les QR codes et exportez les résultats." },
   avis: { title: "Avis étudiants", intro: "Consultez les retours sur la séance sélectionnée." },
   annonce: { title: "Annonces", intro: "Préparez la prochaine séance ou programmez une activité mystère." },
   partage: { title: "Partage et exports", intro: "Diffusez les liens de participation et téléchargez les résultats." },
-};
-const assetChoices = {
-  "/images/cinema.jpg": "Cinéma",
-  "/images/conference.jpeg": "Conférence",
-  "/images/hackathon.jpg": "Hackathon",
-  "/images/tenutradi.jpg": "Tenue traditionnelle",
-  "/images/sport.jpg": "Sport",
-  "/images/tournoi.jpeg": "Tournoi",
-  "/images/scene.jpg": "Scène ouverte",
-  "/images/culinaire.jpg": "Foire culinaire",
-  "/images/im5.jpeg": "Photo du campus",
 };
 const numberFormat = new Intl.NumberFormat("fr-FR");
 const dateFormat = new Intl.DateTimeFormat("fr-FR", {
@@ -31,11 +22,18 @@ const state = {
   sessions: [], activities: [], sessionId: "", view: "vue", results: null,
   resultsFailed: false, baseUrl: location.origin, customBaseUrl: false, admin: null, legacy: false,
   priority: null, priorityResults: null, priorityFailed: false, settingsTab: "annonce",
-  records: { tab: "trace", q: "", kind: "", sessionId: "", page: 1 }, recordResult: null, recordsFailed: false,
+  records: { tab: "students", q: "", kind: "", sessionId: "", page: 1 }, recordResult: null, recordsFailed: false,
+  programs: null, programsFailed: false, gallery: null, galleryFailed: false, gallerySessionId: "",
+  systemStatus: null, systemStatusFailed: false, priorityBusy: false,
 };
 let requestVersion = 0;
 let priorityVersion = 0;
 let recordsVersion = 0;
+let galleryVersion = 0;
+let programsVersion = 0;
+let studentVersion = 0;
+let systemVersion = 0;
+let programsRequest;
 let authenticated = false;
 let editorAction;
 
@@ -108,9 +106,10 @@ function showMessage(target, message, isError = false) {
 }
 
 async function api(url, method = "GET", data) {
+  const multipart = data instanceof FormData;
   const response = await fetch(url, {
-    method, headers: data === undefined ? {} : { "Content-Type": "application/json" },
-    body: data === undefined ? undefined : JSON.stringify(data),
+    method, headers: data === undefined || multipart ? {} : { "Content-Type": "application/json" },
+    body: data === undefined ? undefined : multipart ? data : JSON.stringify(data),
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -131,10 +130,19 @@ function hideDashboard() {
   state.priority = null;
   state.priorityResults = null;
   state.recordResult = null;
+  state.programs = null;
+  state.gallery = null;
+  state.systemStatus = null;
+  galleryVersion += 1;
+  programsVersion += 1;
+  studentVersion += 1;
+  systemVersion += 1;
+  programsRequest = undefined;
   priorityVersion += 1;
   recordsVersion += 1;
   $("content").replaceChildren();
   if ($("editor").open) $("editor").close();
+  if ($("student-card").open) $("student-card").close();
   $("skip-link").hidden = true;
   $("app").hidden = true;
   $("boot").hidden = true;
@@ -178,15 +186,22 @@ function sessionApi(id, suffix = "") {
 
 function syncSelection() {
   const select = $("session-select");
-  const options = [...state.sessions].sort((a, b) => {
-    const rank = (session) => session.status === "archived" ? 2 : session.status === "draft" ? 1 : 0;
-    return rank(a) - rank(b);
-  });
-  select.replaceChildren(...options.map((session) => element("option", {
-    value: session.id, selected: session.id === state.sessionId,
-  }, session.title)));
-  if (!options.length) select.replaceChildren(element("option", {}, "Aucune séance"));
-  select.disabled = !options.length;
+  select.replaceChildren(...sessionChoices(state.sessionId));
+  if (!state.sessions.length) select.replaceChildren(element("option", {}, "Aucune séance"));
+  select.disabled = !state.sessions.length;
+}
+
+function sessionChoices(selected) {
+  return [["published", "Séances publiées"], ["draft", "Brouillons"], ["archived", "Séances archivées"]].map(([value, label]) => {
+    const sessions = state.sessions.filter((session) => session.status === value);
+    return sessions.length ? element("optgroup", { label }, sessions.map((session) =>
+      element("option", { value: session.id, selected: selected === session.id }, session.title))) : null;
+  }).filter(Boolean);
+}
+
+function sessionField(label, name, value = "", allLabel = "Toutes les séances") {
+  return element("label", {}, label, element("select", { name },
+    element("option", { value: "", selected: !value }, allLabel), sessionChoices(value)));
 }
 
 async function loadResults() {
@@ -224,7 +239,10 @@ async function loadDashboard(preferred = state.sessionId) {
     || sessions.find((session) => session.status === "published") || sessions[0];
   state.sessionId = sessions.some((session) => session.id === preferred) ? preferred : defaultSession?.id || "";
   syncSelection();
-  await Promise.all([loadResults(), loadPriority(), state.view === "participations" && can("trace") ? loadRecords() : Promise.resolve()]);
+  await Promise.all([loadResults(), loadPriority(),
+    state.view === "participations" && can("trace") ? loadRecords() : Promise.resolve(),
+    state.view === "mediatheque" ? loadGallery() : Promise.resolve(),
+    state.view === "parametres" && state.settingsTab === "compte" && can("export") ? loadSystemStatus() : Promise.resolve()]);
 }
 
 function updateView() {
@@ -235,6 +253,7 @@ function updateView() {
   if (authenticated) {
     render();
     if (state.view === "participations" && !state.recordResult) loadRecords();
+    if (state.view === "mediatheque" && !state.gallery) loadGallery();
   }
 }
 
@@ -260,11 +279,14 @@ function voteBars(entries, name, total) {
   }));
 }
 
-const priorityStatuses = { draft: "Brouillon", active: "Actif", paused: "En pause", closed: "Arrêté" };
+const priorityStatuses = { draft: "À lancer", active: "En cours", paused: "Suspendu", closed: "Terminé" };
 const responseKinds = { vote: "Vote", feedback: "Avis", guess: "Devinette", "priority-survey": "Fréquence et jour",
   "student.login": "Connexion étudiant", "student.register": "Inscription étudiant", "student.logout": "Déconnexion étudiant",
   "student.password-change": "Mot de passe modifié", "student.password-reset": "Mot de passe réinitialisé",
   "student.birthdate-share": "Date de naissance partagée",
+  "student.academic-update": "Profil étudiant complété", "admin.password-link": "Lien de réinitialisation créé",
+  "admin.program-create": "Filière créée", "admin.program-update": "Filière modifiée",
+  "admin.gallery-upload": "Média ajouté", "admin.gallery-delete": "Média supprimé",
   "admin.activity-create": "Activité créée", "admin.activity-update": "Activité modifiée", "admin.session-create": "Séance créée",
   "admin.session-update": "Séance modifiée", "admin.survey-update": "Sondage prioritaire modifié", "admin.image-upload": "Image importée",
   "admin.cinema-update": "Extrait cinéma modifié", "admin.feedback-moderation": "Avis modéré" };
@@ -292,18 +314,28 @@ function prioritySummary() {
       tag(priorityStatuses[survey?.status] || (state.priorityFailed ? "Indisponible" : "Chargement…"), survey?.status === "active" ? "live" : "active"),
       element("h3", { class: "spaced" }, survey?.title || "Fréquence et jour des activités"),
       element("p", { class: "muted spaced" }, numberFormat.format(state.priorityResults?.total || 0) + " réponses reçues")),
-    button(can("edit") ? "Piloter ce sondage" : "Consulter les résultats", () => navigate("prioritaire"), { style: "primary", icon: "chart" })));
+    button(can("edit") ? "Ouvrir le sondage prioritaire" : "Consulter les résultats", () => navigate("prioritaire"), { style: "primary", icon: "chart" })),
+    survey && can("edit") && priorityActions(survey));
+}
+
+function priorityActions(survey) {
+  const start = button(survey.status === "paused" ? "Reprendre le sondage" : survey.status === "closed" ? "Relancer le sondage" : "Lancer le sondage",
+    () => changePriorityStatus("active"), { style: "primary" });
+  const pause = button("Suspendre", () => changePriorityStatus("paused"));
+  const finish = button("Terminer", () => stopPriority(survey), { style: "danger" });
+  start.disabled = state.priorityBusy || survey.status === "active";
+  pause.disabled = state.priorityBusy || survey.status !== "active";
+  finish.disabled = state.priorityBusy || ["closed", "draft"].includes(survey.status);
+  return element("div", { class: "survey-controls spaced" }, element("div", { class: "button-row" }, start, pause, finish),
+    element("p", { class: "muted" }, "Suspendre interrompt les réponses. Terminer clôt la collecte. Les participations sont conservées."));
 }
 
 function priorityView() {
   const survey = state.priority;
   if (!survey) return [panel("Fréquence et jour des activités", null, empty(state.priorityFailed ? "Sondage indisponible" : "Chargement du sondage…"))];
   const result = state.priorityResults;
-  const actions = element("div", { class: "button-row spaced" },
-    can("edit") && button("Modifier le contenu", () => editPriority(survey)),
-    can("edit") && survey.status !== "active" && button(survey.status === "paused" ? "Reprendre" : "Activer", () => changePriorityStatus("active"), { style: "primary" }),
-    can("edit") && survey.status === "active" && button("Mettre en pause", () => changePriorityStatus("paused")),
-    can("edit") && !["closed", "draft"].includes(survey.status) && button("Arrêter le sondage", () => stopPriority(survey), { style: "danger" }));
+  const actions = can("edit") && element("div", {}, priorityActions(survey),
+    element("div", { class: "button-row spaced" }, button("Modifier les questions et la présentation", () => editPriority(survey))));
   const frequencyLabels = new Map((result?.frequency || []).map((item) => [item.value, item.label]));
   const weekdayLabels = new Map((result?.weekdays || []).map((item) => [item.value, item.label]));
   const rows = (result?.responses || []).map((item) => [item.name || "Étudiant", item.email || "—", item.frequencyLabel || frequencyLabels.get(item.frequency) || item.frequency,
@@ -314,7 +346,7 @@ function priorityView() {
     element("p", { class: "muted spaced" }, survey.status === "active" ? "Les étudiants peuvent répondre. Une réponse est conservée par étudiant."
       : survey.status === "paused" ? "Le formulaire est temporairement suspendu. Les réponses sont conservées."
       : survey.status === "closed" ? "La collecte est arrêtée. Les réponses restent consultables." : "Le formulaire sera visible aux étudiants après activation."),
-    survey.collectBirthdate && element("p", { class: "muted spaced" }, "Date de naissance demandée avec consentement : " + (survey.birthdatePurpose || "À préciser")), actions),
+    survey.collectBirthdate && element("p", { class: "muted spaced" }, "Date de naissance proposée après la réponse, avec consentement : " + (survey.birthdatePurpose || "À préciser")), actions),
   element("div", { class: "metrics" }, tile("Réponses reçues", numberFormat.format(result?.total || 0), "chart"),
     tile("État de la collecte", priorityStatuses[survey.status] || survey.status, "broadcast"),
     tile("Jour préféré", "Du lundi au dimanche", "calendar")),
@@ -336,7 +368,7 @@ function priorityView() {
 }
 
 function editPriority(survey) {
-  const birthdate = checkbox("Demander la date de naissance (facultative, avec consentement)", "collectBirthdate", survey.collectBirthdate);
+  const birthdate = checkbox("Proposer la date de naissance après la réponse (facultative, avec consentement)", "collectBirthdate", survey.collectBirthdate);
   const purpose = field("Pourquoi demander cette date ?", "textarea", { name: "birthdatePurpose", maxlength: 500 }, survey.birthdatePurpose,
     "Cette explication sera visible avant le consentement de l’étudiant.");
   const toggle = () => { purpose.hidden = !birthdate.querySelector("input").checked; };
@@ -357,15 +389,19 @@ function editPriority(survey) {
 }
 
 async function changePriorityStatus(statusValue) {
+  if (state.priorityBusy) return;
+  state.priorityBusy = true;
+  render();
   try {
     await api("/api/admin/priority-survey", "PUT", { status: statusValue });
     await loadPriority();
     showMessage($("app-message"), "Sondage " + (priorityStatuses[statusValue] || statusValue).toLocaleLowerCase("fr") + ".");
   } catch (error) { reportError(error); }
+  finally { state.priorityBusy = false; if (authenticated) render(); }
 }
 
 function stopPriority(survey) {
-  editor("Arrêter le sondage prioritaire", "Arrêter", [element("p", { class: "muted" },
+  editor("Terminer le sondage prioritaire", "Terminer le sondage", [element("p", { class: "muted" },
     "La collecte sera fermée. Les " + numberFormat.format(state.priorityResults?.total || 0) + " réponses reçues seront conservées.")], async () => {
     await api("/api/admin/priority-survey", "PUT", { status: "closed" });
     return { message: "Collecte arrêtée. Réponses conservées." };
@@ -376,7 +412,7 @@ function dataTable(headers, rows) {
   if (!rows.length) return empty("Aucune donnée pour le moment", "Les participations apparaîtront ici après leur enregistrement.");
   return element("div", { class: "table-scroll", tabindex: "0", role: "region", "aria-label": "Tableau des réponses" },
     element("table", { class: "data-table" }, element("thead", {}, element("tr", {}, headers.map((header) => element("th", { scope: "col" }, header)))),
-      element("tbody", {}, rows.map((row) => element("tr", {}, row.map((cell) => element("td", {}, cell == null || cell === "" ? "—" : String(cell))))))));
+      element("tbody", {}, rows.map((row) => element("tr", {}, row.map((cell) => element("td", {}, cell == null || cell === "" ? "—" : cell instanceof Node ? cell : String(cell))))))));
 }
 
 function formatBirthdate(value) {
@@ -393,13 +429,15 @@ function responsePanel(responses) {
 
 async function loadRecords() {
   if (!authenticated || !can("trace")) return;
+  if (state.records.tab === "programs") return loadPrograms();
+  if (state.records.tab === "students" && !state.programs) loadPrograms();
   const version = ++recordsVersion;
   const filters = state.records;
   state.recordsFailed = false;
   state.recordResult = null;
   render();
-  const query = new URLSearchParams({ q: filters.q, page: String(filters.page) });
-  if (filters.tab === "trace") { query.set("kind", filters.kind); query.set("sessionId", filters.sessionId); }
+  const query = recordQuery(filters);
+  query.set("page", String(filters.page));
   try {
     const result = await api("/api/admin/" + (filters.tab === "students" ? "students" : "trace") + "?" + query);
     if (version !== recordsVersion || !authenticated) return;
@@ -412,34 +450,243 @@ async function loadRecords() {
   if (authenticated) render();
 }
 
+function recordQuery(filters = state.records) {
+  const fields = filters.tab === "students" ? ["q", "programId", "studyYear", "birthMonth", "publicationConsent", "from", "to"] : ["q", "kind", "sessionId", "from", "to"];
+  return new URLSearchParams(fields.filter((key) => filters[key] && (key !== "birthMonth" || can("export"))).map((key) => [key, filters[key]]));
+}
+
 function recordsView() {
   const filters = state.records;
-  const tabs = tabBar([["trace", "Participations"], ["students", "Étudiants inscrits"]], filters.tab, (tab) => {
+  const tabs = tabBar([["students", "Étudiants inscrits"], ["trace", "Historique des participations"], ["programs", "Filières"]], filters.tab, (tab) => {
     state.records = { ...filters, tab, page: 1 }; loadRecords();
   });
+  if (filters.tab === "programs") return [tabs, ...programsView()];
   const search = field("Nom ou email", "input", { name: "q", type: "search", maxlength: 150, placeholder: "Rechercher un étudiant…" }, filters.q);
-  const allSessions = [["", "Toutes les séances"], ...state.sessions.map((session) => [session.id, session.title])];
   const form = element("form", { class: "record-filters", onsubmit: (event) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    state.records = { ...filters, q: data.get("q").trim(), kind: data.get("kind") || "", sessionId: data.get("sessionId") || "", page: 1 };
+    if (data.get("from") && data.get("to") && data.get("from") > data.get("to")) {
+      showMessage($("app-message"), "La fin de la période doit suivre sa date de début.", true); return;
+    }
+    state.records = { ...filters, ...Object.fromEntries(data), q: data.get("q").trim(), page: 1 };
     loadRecords();
   }}, search,
   ...(filters.tab === "trace" ? [selectField("Participation", "kind", [["", "Tous les types"], ...Object.entries(responseKinds)], filters.kind),
-    selectField("Séance", "sessionId", allSessions, filters.sessionId)] : []),
-  element("button", { class: "button primary", type: "submit" }, "Rechercher"));
+    sessionField("Séance", "sessionId", filters.sessionId)] : [
+    selectField("Filière", "programId", [["", "Toutes les filières"], ...(state.programs || []).map((program) => [program.id, program.name + (program.archived ? " (archivée)" : "")])], filters.programId || ""),
+    selectField("Année d’étude", "studyYear", [["", "Toutes les années"], ["1", "Licence 1"], ["2", "Licence 2"], ["3", "Licence 3"]], filters.studyYear || ""),
+    ...(can("export") ? [selectField("Mois de naissance", "birthMonth", [["", "Tous les mois"], ...Array.from({ length: 12 }, (_, index) => [String(index + 1), new Intl.DateTimeFormat("fr-FR", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, index, 1)))])], filters.birthMonth || ""),
+      selectField("Publications d’anniversaire", "publicationConsent", [["", "Tous les accords"], ["true", "Publications autorisées"], ["false", "Sans autorisation"]], filters.publicationConsent || "")] : []),
+  ]),
+  field(filters.tab === "students" ? "Inscrit à partir du" : "À partir du", "input", { name: "from", type: "date" }, filters.from),
+  field("Jusqu’au", "input", { name: "to", type: "date" }, filters.to),
+  element("div", { class: "button-row" }, element("button", { class: "button primary", type: "submit" }, "Appliquer les filtres"),
+    button("Réinitialiser", () => { state.records = { tab: filters.tab, q: "", kind: "", sessionId: "", page: 1 }; loadRecords(); }, { style: "ghost" })));
   form.querySelectorAll("select").forEach((select) => { select.required = false; });
   const result = state.recordResult;
-  const headers = filters.tab === "students" ? ["Nom", "Email", ...(can("export") ? ["Naissance"] : []), "Inscrit le"]
+  const headers = filters.tab === "students" ? ["Étudiant", "Filière / année", "Participations", "Dernière connexion", ...(can("export") ? ["Naissance"] : []), "Inscrit le", "Fiche"]
     : ["Étudiant", "Email", "Participation", "Séance / sondage", "Réponse", "Date et heure"];
   const rows = (result?.items || []).map((item) => filters.tab === "students"
-    ? [item.name, item.email, ...(can("export") ? [formatBirthdate(item.birthdate)] : []), item.createdAt ? formatDate(item.createdAt) : "Non renseignée"]
+    ? [element("div", { class: "student-identity" }, element("strong", {}, item.name || "Nom non renseigné"), element("span", { class: "muted" }, item.email)),
+      [item.programName || "Filière non renseignée", item.studyYear ? "Licence " + item.studyYear : "Année non renseignée"].join(" · "),
+      (item.counts?.votes || 0) + " votes · " + (item.counts?.feedback || 0) + " avis · " + (item.counts?.logins || 0) + " connexions",
+      item.lastLoginAt ? formatDate(item.lastLoginAt) : "Aucune connexion enregistrée", ...(can("export") ? [formatBirthdate(item.birthdate)] : []),
+      item.createdAt ? formatDate(item.createdAt) : "Non renseignée", button("Ouvrir", () => openStudent(item.id))]
     : [item.name || "Étudiant", item.email, responseKinds[item.kind] || item.kind,
       item.sessionTitle || (item.kind === "priority-survey" || item.kind === "admin.survey-update" ? state.priority?.title || "Sondage prioritaire" : item.kind?.startsWith("student.") ? "Compte étudiant" : "Administration"),
       typeof item.detail === "object" ? Object.values(item.detail || {}).filter(Boolean).join(" · ") : item.detail, formatDate(item.createdAt)]);
   return [tabs, panel(filters.tab === "students" ? "Annuaire étudiant" : "Historique des réponses", "Dates et heures à Cotonou (UTC+1).", form,
+    filters.tab === "students" && can("export") && element("div", { class: "button-row" },
+      link("Exporter en Excel", "/api/admin/students/export/xlsx?" + recordQuery(), { icon: "download", download: "" }),
+      link("Exporter en Word", "/api/admin/students/export/docx?" + recordQuery(), { icon: "download", download: "" }),
+      element("span", { class: "muted export-help" }, "Tous les étudiants correspondant aux filtres appliqués.")),
     result ? [element("p", { class: "muted spaced" }, numberFormat.format(result.total || 0) + " résultats"), dataTable(headers, rows), pagination(result)]
       : empty(state.recordsFailed ? "Chargement impossible" : "Chargement des participations…"))];
+}
+
+async function loadPrograms() {
+  if (programsRequest) return programsRequest;
+  const version = ++programsVersion;
+  state.programsFailed = false;
+  programsRequest = (async () => {
+    try {
+      const result = await api("/api/admin/programs");
+      if (version === programsVersion && authenticated) state.programs = result.programs || [];
+    } catch (error) {
+      if (version !== programsVersion) return;
+      state.programsFailed = true;
+      reportError(error);
+    } finally {
+      if (version === programsVersion) programsRequest = undefined;
+      if (authenticated) render();
+    }
+  })();
+  return programsRequest;
+}
+
+function programsView() {
+  const list = state.programs;
+  return [panel("Filières et années d’étude", "Les étudiants choisissent leur filière et leur année de Licence à l’inscription.",
+    can("edit") && element("div", { class: "button-row" }, button("Ajouter une filière", () => editProgram(), { style: "primary", icon: "plus" })),
+    list ? dataTable(["Filière", "État", "Étudiants inscrits", "Actions"], list.map((program) => [program.name, program.archived ? "Archivée" : "Disponible",
+      numberFormat.format(program.studentCount || 0), element("div", { class: "button-row" },
+        can("edit") && button("Renommer", () => editProgram(program)),
+        can("archive") && button(program.archived ? "Réactiver" : "Archiver", () => archiveProgram(program), { style: "ghost" }))]))
+      : empty(state.programsFailed ? "Filières indisponibles" : "Chargement des filières…"))];
+}
+
+function editProgram(program) {
+  editor(program ? "Renommer la filière" : "Ajouter une filière", "Enregistrer", [
+    field("Nom de la filière", "input", { name: "name", required: true, maxlength: 120 }, program?.name),
+  ], async (data) => {
+    await api("/api/admin/programs" + (program ? "/" + encodeURIComponent(program.id) : ""), program ? "PUT" : "POST", { name: data.get("name") });
+    state.programs = null;
+    return { message: program ? "Filière renommée." : "Filière ajoutée." };
+  });
+}
+
+function archiveProgram(program) {
+  editor(program.archived ? "Réactiver la filière" : "Archiver la filière", program.archived ? "Réactiver" : "Archiver", [
+    element("p", { class: "muted" }, program.archived ? "La filière sera à nouveau proposée à l’inscription." : "La filière ne sera plus proposée aux nouveaux inscrits. Les profils existants sont conservés."),
+  ], async () => {
+    await api("/api/admin/programs/" + encodeURIComponent(program.id), "PUT", { archived: !program.archived });
+    state.programs = null;
+    return { message: program.archived ? "Filière réactivée." : "Filière archivée." };
+  }, program.archived ? "primary" : "danger");
+}
+
+async function openStudent(id, page = 1) {
+  const version = ++studentVersion;
+  const dialog = $("student-card");
+  $("student-card-title").textContent = "Fiche étudiante";
+  $("student-card-content").replaceChildren(empty("Chargement du profil…"));
+  if (!dialog.open) dialog.showModal();
+  try {
+    const result = await api("/api/admin/students/" + encodeURIComponent(id) + "?page=" + page);
+    if (version !== studentVersion || !authenticated || !dialog.open) return;
+    const student = result.student;
+    $("student-card-title").textContent = student.name || "Fiche étudiante";
+    const details = [
+      ["Prénom", student.firstName || "Non renseigné"], ["Nom", student.lastName || "Non renseigné"],
+      ["Email", student.email || "Non renseigné"], ["Filière", student.programName || "Non renseignée"],
+      ["Année", student.studyYear ? "Licence " + student.studyYear : "Non renseignée"], ["Inscription", formatDate(student.createdAt)],
+      ["Dernière connexion", student.lastLoginAt ? formatDate(student.lastLoginAt) : "Aucune connexion enregistrée"],
+      ...(can("export") ? [["Naissance", formatBirthdate(student.birthdate)],
+        ["Autorisation de publication", student.publicationConsent === true ? "Accord donné" : student.publicationConsent === false ? "Accord non donné" : "Non renseignée"]] : []),
+    ];
+    $("student-card-content").replaceChildren(...[
+      element("dl", { class: "details" }, details.map(([label, value]) => element("div", {}, element("dt", {}, label), element("dd", {}, value)))),
+      element("div", { class: "activity-tags" }, tag((student.counts?.votes || 0) + " votes"), tag((student.counts?.feedback || 0) + " avis"), tag((student.counts?.logins || 0) + " connexions")),
+      can("archive") ? studentResetPanel(student) : null,
+      element("h3", { class: "spaced" }, "Historique de l’étudiant"),
+      dataTable(["Action", "Séance", "Détail", "Date et heure"], (result.actions || []).map((action) => [responseKinds[action.kind] || action.kind, action.sessionTitle, action.detail, formatDate(action.createdAt)])),
+      element("div", { class: "button-row spaced" },
+        page > 1 && button("Précédent", () => openStudent(id,page-1)),
+        element("span", { class: "muted" }, "Page " + page + " sur " + Math.max(1,Math.ceil(result.total/result.pageSize))),
+        page*result.pageSize < result.total && button("Suivant", () => openStudent(id,page+1)))
+    ].filter(Boolean));
+  } catch (error) {
+    if (version !== studentVersion) return;
+    $("student-card-content").replaceChildren(empty("Profil indisponible", error.message));
+    reportError(error);
+  }
+}
+
+function studentResetPanel(student) {
+  const output = element("div", { class: "stack" });
+  const control = button("Créer un lien de réinitialisation", async () => {
+    control.disabled = true;
+    try {
+      const result = await api("/api/admin/students/" + encodeURIComponent(student.id) + "/password-reset", "POST", {});
+      if (!$("student-card").open) return;
+      const url = element("input", { value: result.url, type: "url", readonly: true, "aria-label": "Lien de réinitialisation du mot de passe" });
+      const expiry = typeof result.expiresAt === "number" ? new Date(result.expiresAt).toISOString() : result.expiresAt;
+      output.replaceChildren(url, element("div", { class: "button-row" }, button("Copier le lien", () => copyLink(url))),
+        element("p", { class: "muted" }, "Lien à usage unique, valable 30 minutes. Expiration : " + formatDate(expiry)));
+    } catch (error) { reportError(error); }
+    finally { control.disabled = false; }
+  });
+  return element("section", { class: "account-support stack" }, element("h3", {}, "Aide à la connexion"),
+    element("p", { class: "muted" }, "Vérifiez l’identité de l’étudiant avant de lui transmettre ce lien. Le lien permet de choisir un nouveau mot de passe."),
+    element("div", { class: "button-row" }, control), output);
+}
+
+async function loadGallery() {
+  const version = ++galleryVersion;
+  state.galleryFailed = false;
+  try {
+    const result = await api("/api/admin/gallery");
+    if (version === galleryVersion && authenticated) state.gallery = result.items || [];
+  } catch (error) {
+    if (version !== galleryVersion) return;
+    state.galleryFailed = true;
+    reportError(error);
+  }
+  if (authenticated) render();
+}
+
+function galleryView() {
+  const filter = sessionField("Afficher les médias d’une séance", "gallerySessionId", state.gallerySessionId);
+  filter.addEventListener("change", (event) => { state.gallerySessionId = event.target.value; render(); });
+  const items = state.gallery?.filter((item) => !state.gallerySessionId || item.sessionId === state.gallerySessionId);
+  const cards = items?.map((item) => element("article", { class: "catalog-card gallery-card" },
+    item.type === "video" ? element("video", { src: item.url, controls: true, preload: "metadata", "aria-label": item.alt || item.title })
+      : element("img", { src: item.url, alt: item.alt || item.title || "Photo de la séance", loading: "lazy" }),
+    element("div", {}, element("div", { class: "activity-tags" }, tag(item.type === "video" ? "Vidéo" : "Photo"),
+      tag(item.publiclyVisible ? "Visible sur le site" : "Non diffusé", item.publiclyVisible ? "live" : "active")), element("h2", {}, item.title || "Souvenir de séance"),
+      element("p", {}, item.sessionTitle || "Séance non précisée"), element("time", { class: "muted", datetime: item.createdAt }, formatDate(item.createdAt))),
+    can("edit") && element("footer", { class: "button-row" }, button("Supprimer", () => removeGalleryItem(item), { style: "danger" }))));
+  return [panel("Photos et vidéos des séances", "Les médias sont diffusés sur le site selon la publication et la date de leur séance.",
+    element("div", { class: "gallery-toolbar" }, filter)),
+  !items ? empty(state.galleryFailed ? "Médiathèque indisponible" : "Chargement des médias…")
+    : items.length ? element("div", { class: "catalog" }, cards) : empty("Aucun média pour cette sélection", can("edit") ? "Importez une photo ou une vidéo et associez-la à sa séance." : "Les souvenirs des séances seront affichés ici.")];
+}
+
+function editGallery() {
+  if (!state.sessions.length) { showMessage($("app-message"), "Créez une séance avant d’ajouter ses médias.", true); return; }
+  const choice = sessionField("Séance associée", "sessionId", state.gallerySessionId || state.sessionId, "Choisir une séance…");
+  choice.querySelector("select").required = true;
+  const file = field("Fichier à importer", "input", { type: "file", name: "file", required: true, accept: "image/jpeg,image/png,image/webp,video/mp4" }, null,
+    "Photo JPG, PNG ou WebP : 5 Mo maximum. Vidéo MP4 : 50 Mo maximum.");
+  const preview = element("div", { class: "upload-preview" });
+  let objectUrl;
+  const release = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); objectUrl = undefined; };
+  $("editor").addEventListener("close", release, { once: true });
+  file.addEventListener("change", () => {
+    release(); preview.replaceChildren();
+    const input = file.querySelector("input");
+    input.setCustomValidity("");
+    const selected = input.files[0];
+    if (!selected) return;
+    try { validateGalleryFile(selected); }
+    catch (error) { input.setCustomValidity(error.message); input.reportValidity(); return; }
+    objectUrl = URL.createObjectURL(selected);
+    preview.append(selected.type === "video/mp4" ? element("video", { src: objectUrl, controls: true, preload: "metadata" }) : element("img", { src: objectUrl, alt: "Aperçu du fichier choisi" }));
+  });
+  editor("Ajouter un média de séance", "Importer le média", [choice, file, preview,
+    field("Titre", "input", { name: "title", required: true, maxlength: 160 }, ""),
+    field("Description du contenu", "textarea", { name: "alt", maxlength: 300 }, "", "Décrivez ce que montre la photo ou la vidéo pour les étudiants qui ne peuvent pas la voir."),
+  ], async (data) => {
+    validateGalleryFile(data.get("file"));
+    await api("/api/admin/gallery", "POST", data);
+    state.gallery = null;
+    return { message: "Média ajouté à la médiathèque." };
+  });
+}
+
+function validateGalleryFile(file) {
+  if (!(file instanceof File) || !file.size) throw new Error("Choisissez un fichier à importer.");
+  const video = file.type === "video/mp4";
+  if (!video && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) throw new Error("Choisissez une photo JPG, PNG ou WebP, ou une vidéo MP4.");
+  if (file.size > (video ? 50 : 5) * 1024 * 1024) throw new Error(video ? "La vidéo doit peser 50 Mo maximum." : "L’image doit peser 5 Mo maximum.");
+}
+
+function removeGalleryItem(item) {
+  editor("Supprimer ce média", "Supprimer", [element("p", { class: "muted" }, "« " + (item.title || "Ce média") + " » sera retiré de la médiathèque étudiante.")], async () => {
+    await api("/api/admin/gallery/" + encodeURIComponent(item.id), "DELETE");
+    state.gallery = null;
+    return { message: "Média supprimé." };
+  }, "danger");
 }
 
 function pagination(result) {
@@ -463,13 +710,41 @@ function tabBar(options, current, action) {
 function settingsView(session) {
   const options = [["annonce", "Annonce de la séance"], ...(canShareView() ? [["partage", can("export") ? "Liens, QR et exports" : "Liens et QR"]] : []), ["compte", "Mon accès"]];
   const tab = options.some(([id]) => id === state.settingsTab) ? state.settingsTab : "annonce";
-  const tabs = tabBar(options, tab, (value) => { state.settingsTab = value; render(); });
+  const tabs = tabBar(options, tab, (value) => {
+    state.settingsTab = value; render();
+    if (value === "compte" && can("export") && !state.systemStatus) loadSystemStatus();
+  });
   if (tab === "compte") return [tabs, panel("Accès au comité", null,
     element("dl", { class: "details" }, element("div", {}, element("dt", {}, "Compte"), element("dd", {}, state.admin?.username || "—")),
       element("div", {}, element("dt", {}, "Rôle"), element("dd", {}, roleLabels[state.admin?.role] || "—"))),
-    element("p", { class: "muted" }, "Responsable : gestion complète et exports. Organisation : séances, activités et suivi des participations. Consultation : résultats agrégés."))];
+    element("p", { class: "muted" }, "Responsable : gestion complète et exports. Organisation : séances, activités et suivi des participations. Consultation : résultats agrégés.")),
+    ...(can("export") ? [systemStatusPanel()] : [])];
   if (!session) return [tabs, empty("Aucune séance sélectionnée", "Créez une séance pour préparer les annonces et les liens de diffusion.")];
   return [tabs, ...(tab === "partage" ? shareView(session) : announcementView(session))];
+}
+
+async function loadSystemStatus() {
+  const version = ++systemVersion;
+  state.systemStatusFailed = false;
+  try {
+    const result = await api("/api/admin/system-status");
+    if (version === systemVersion && authenticated) state.systemStatus = result;
+  } catch (error) {
+    if (version !== systemVersion) return;
+    state.systemStatusFailed = true;
+    reportError(error);
+  }
+  if (authenticated) render();
+}
+
+function systemStatusPanel() {
+  const recovery = state.systemStatus?.passwordRecovery;
+  return panel("Récupération des mots de passe", "État de l’envoi des emails de réinitialisation.",
+    recovery ? [tag(recovery.enabled ? "Envoi d’emails configuré" : "Envoi d’emails à configurer", recovery.enabled ? "live" : "active"),
+      !recovery.enabled && element("p", { class: "muted spaced" }, "Dans Render, ouvrez votre service puis Environment et renseignez les variables SMTP manquantes : " + ((recovery.missing || []).join(", ") || "voir la configuration du serveur") + ". Enregistrez puis redéployez le service."),
+      !recovery.enabled && element("p", { class: "muted spaced" }, "En attendant, ouvrez la fiche d’un étudiant pour créer un lien de réinitialisation après vérification de son identité.")]
+      : empty(state.systemStatusFailed ? "État indisponible" : "Chargement de la configuration…"),
+    element("div", { class: "button-row spaced" }, button("Vérifier la configuration", loadSystemStatus, { icon: "refresh" })));
 }
 
 function sessionControls(session) {
@@ -508,16 +783,16 @@ function stopSession(session) {
 
 function cinemaPanel(session) {
   const cinema = session.cinema;
-  return panel("Projection cinéma", "Un extrait de 25 à 30 minutes et, si souhaité, un lien pour voir le film complet.",
+  return panel("Suite du film", "Proposez un extrait de 30 minutes maximum et le lien du film complet. Cette option est disponible pour toute séance.",
     cinema ? [tag(cinema.enabled ? "Projection activée" : "Projection en pause", cinema.enabled ? "live" : "active"),
       element("h3", { class: "spaced" }, cinema.title),
       element("p", { class: "muted spaced" }, cinema.durationSeconds > 0 ? "Durée vérifiée : " + Math.round(cinema.durationSeconds / 60) + " min" : "Durée contrôlée lors de l’activation"),
-      element("video", { class: "cinema-preview", controls: true, preload: "none", src: cinema.clipUrl, "aria-label": cinema.title }),
+      element("details", { class: "advanced-fields spaced" }, element("summary", {}, "Prévisualiser l’extrait"),
+        element("video", { class: "cinema-preview", controls: true, preload: "none", src: cinema.clipUrl, "aria-label": cinema.title })),
       cinema.fullUrl && link("Voir le film complet", cinema.fullUrl, { external: true, icon: "external" })]
-      : empty("Aucun extrait configuré", "Ajoutez l’URL directe d’un fichier MP4 pour proposer la projection sur la page étudiante."),
-    canEditSession(session) && element("div", { class: "button-row spaced" }, button(cinema ? "Modifier l’extrait" : "Configurer un extrait", () => editCinema(session)),
-      cinema && button(cinema.enabled ? "Désactiver" : "Activer", () => toggleCinema(session)),
-      cinema && button("Retirer l’extrait", () => removeCinema(session), { style: "danger" })));
+      : element("p", { class: "muted" }, "Aucun extrait n’est encore associé à cette séance."),
+    canEditSession(session) && cinemaForm(session),
+    canEditSession(session) && cinema && element("div", { class: "button-row spaced" }, button("Retirer l’extrait", () => removeCinema(session), { style: "danger" })));
 }
 
 function removeCinema(session) {
@@ -528,27 +803,27 @@ function removeCinema(session) {
   }, "danger");
 }
 
-function editCinema(session) {
+function cinemaForm(session) {
   const cinema = session.cinema;
-  editor("Configurer la projection cinéma", "Vérifier et enregistrer", [
+  const submit = element("button", { class: "button primary", type: "submit" }, "Vérifier et enregistrer l’extrait");
+  return element("form", { class: "stack spaced", onsubmit: async (event) => {
+    event.preventDefault();
+    if (submit.disabled) return;
+    const data = new FormData(event.currentTarget);
+    submit.disabled = true; submit.textContent = "Vérification de la vidéo…";
+    try {
+      await api(sessionApi(session.id), "PUT", { cinema: { title: data.get("title"), clipUrl: data.get("clipUrl"), fullUrl: data.get("fullUrl"), enabled: data.has("enabled") } });
+      await loadDashboard(session.id);
+      showMessage($("app-message"), "Extrait vérifié et enregistré.");
+    } catch (error) { reportError(error); }
+    finally { submit.disabled = false; submit.textContent = "Vérifier et enregistrer l’extrait"; }
+  }},
     field("Titre de la projection", "input", { name: "title", required: true, maxlength: 160 }, cinema?.title || "Projection cinéma"),
     field("URL HTTPS directe du fichier MP4", "input", { name: "clipUrl", type: "url", required: true, maxlength: 2000 }, cinema?.clipUrl,
       "Hébergez l’extrait sur votre service vidéo. La durée réelle est vérifiée à l’enregistrement : 30 minutes maximum."),
     field("Lien du film complet (facultatif)", "input", { name: "fullUrl", type: "url", maxlength: 2000 }, cinema?.fullUrl),
     checkbox("Rendre la projection disponible aux étudiants", "enabled", cinema?.enabled ?? true),
-    element("p", { class: "muted" }, "Prévoyez un extrait de 25 à 30 minutes dont vous pouvez diffuser le contenu."),
-  ], async (data) => {
-    await api(sessionApi(session.id), "PUT", { cinema: { title: data.get("title"), clipUrl: data.get("clipUrl"), fullUrl: data.get("fullUrl"), enabled: data.has("enabled") } });
-    return { message: "Projection vérifiée et enregistrée.", sessionId: session.id };
-  });
-}
-
-async function toggleCinema(session) {
-  try {
-    await api(sessionApi(session.id), "PUT", { cinema: { ...session.cinema, enabled: !session.cinema.enabled } });
-    await loadDashboard(session.id);
-    showMessage($("app-message"), session.cinema.enabled ? "Projection désactivée." : "Projection activée.");
-  } catch (error) { reportError(error); }
+    element("div", { class: "button-row" }, submit));
 }
 
 function overallPanel(results) {
@@ -613,7 +888,7 @@ function surveyView(session, results) {
   }));
   const items = [panel("Toutes les séances", null, state.sessions.length ? list : empty("Aucun sondage créé"))];
   if (!session) return items;
-  items.push(sessionControls(session), overallPanel(results));
+  items.push(sessionControls(session), cinemaPanel(session), overallPanel(results));
   const detailed = results?.votes.filter((entry) => entry.options.length) || [];
   if (detailed.length) {
     const selector = element("select", { "aria-label": "Activité à détailler" }, detailed.map((entry) =>
@@ -629,7 +904,6 @@ function surveyView(session, results) {
     showDetails();
     items.push(panel("Détail par activité", null, element("label", {}, "Activité", selector), detail));
   }
-  items.push(cinemaPanel(session));
   if (can("trace")) items.push(responsePanel(results?.responses));
   items.push(...feedbackView(results));
   return items;
@@ -660,6 +934,8 @@ function feedbackView(results) {
   return [panel("Retours de la séance", average ? numberFormat.format(Number(average.toFixed(1))) + " / 5 en moyenne" : null,
     element("div", { class: "response-list" }, feedback.map((item) => element("article", { class: "response" },
       element("div", { class: "response-content" },
+        can("trace") && element("p", { class: "student-identity" }, element("strong", {}, item.name || "Participant historique"),
+          item.email && element("span", { class: "muted" }, item.email)),
         Number.isFinite(item.rating) && element("span", { class: "response-rating" }, item.rating + " / 5"),
         element("time", { class: "muted response-date", datetime: item.createdAt }, formatDate(item.createdAt)),
         item.comment && element("p", { class: "response-comment" }, item.comment)),
@@ -799,9 +1075,9 @@ function render() {
   $("page-title").textContent = pageTitle;
   $("page-intro").textContent = view === "partage" && !can("export") ? "Diffusez les liens de participation."
     : (!can("edit") && readOnlyIntro[view]) || intro;
-  $("session-bar").hidden = ["activites", "prioritaire", "participations"].includes(view);
-  $("new-button").hidden = !can("edit") || !["vue", "sondages", "activites"].includes(view);
-  $("new-button-label").textContent = view === "activites" ? "Nouvelle activité" : "Nouveau sondage";
+  $("session-bar").hidden = ["activites", "prioritaire", "participations", "mediatheque"].includes(view);
+  $("new-button").hidden = !can("edit") || !["vue", "sondages", "activites", "mediatheque", "annonce", "parametres", "cinema"].includes(view);
+  $("new-button-label").textContent = view === "activites" ? "Nouvelle activité" : view === "mediatheque" ? "Ajouter un média" : "Nouvelle séance";
   document.querySelectorAll("[data-view]").forEach((link) => {
     link.hidden = (link.dataset.view === "partage" && !canShareView()) || (link.dataset.view === "participations" && !can("trace"));
     if (link.dataset.view === view) link.setAttribute("aria-current", "page");
@@ -811,6 +1087,8 @@ function render() {
     vue: () => overview(session, state.results),
     sondages: () => surveyView(session, state.results),
     activites: activitiesView,
+    mediatheque: galleryView,
+    cinema: () => session ? [cinemaPanel(session)] : [empty("Créez d’abord une séance", "Utilisez Nouvelle séance pour rattacher la suite du film à sa projection.")],
     prioritaire: priorityView,
     participations: recordsView,
     parametres: () => settingsView(session),
@@ -853,12 +1131,10 @@ function checkbox(label, name, checked, value) {
 
 function assetField(activity) {
   const initial = activity?.image || "/images/im5.jpeg";
-  const imageUrl = field("Chemin ou URL HTTPS de l’image", "input", { name: "image", required: true, maxlength: 2000 }, initial,
-    "Collez une adresse d’image ou choisissez un fichier ci-dessous.");
-  const library = selectField("Images du campus", "imageChoice", [["", "Choisir une image…"], ...Object.entries(assetChoices)], "");
-  library.querySelector("select").required = false;
-  const upload = field("Importer une image", "input", { name: "imageFile", type: "file", accept: "image/jpeg,image/png,image/webp" }, null,
-    "JPG, PNG ou WebP · 5 Mo maximum. L’image sera conservée sur le serveur.");
+  const imageUrl = field("Adresse de l’image", "input", { name: "image", maxlength: 1000 }, initial,
+    "Une URL HTTPS peut remplacer l’import. Le visuel actuel est conservé si vous ne choisissez pas de nouveau fichier.");
+  const upload = field("Choisir une image sur mon appareil", "input", { name: "imageFile", type: "file", accept: "image/jpeg,image/png,image/webp" }, null,
+    "JPG, PNG ou WebP · 5 Mo maximum. Votre fichier sera importé et conservé.");
   const preview = element("img", { class: "image-preview", src: initial, alt: "Aperçu du visuel de l’activité", width: 460, height: 180 });
   let objectUrl;
   const release = () => { if (objectUrl) URL.revokeObjectURL(objectUrl); objectUrl = undefined; };
@@ -868,12 +1144,6 @@ function assetField(activity) {
     upload.querySelector("input").value = "";
     upload.querySelector("input").setCustomValidity("");
     preview.src = event.currentTarget.value.trim();
-  });
-  library.addEventListener("change", () => {
-    const value = library.querySelector("select").value;
-    if (!value) return;
-    imageUrl.querySelector("input").value = value;
-    imageUrl.querySelector("input").dispatchEvent(new Event("change"));
   });
   upload.addEventListener("change", () => {
     const input = upload.querySelector("input");
@@ -889,7 +1159,8 @@ function assetField(activity) {
     objectUrl = URL.createObjectURL(file);
     preview.src = objectUrl;
   });
-  return element("fieldset", { class: "image-field stack" }, element("legend", {}, "Visuel de l’activité"), preview, library, imageUrl, upload);
+  return element("fieldset", { class: "image-field stack" }, element("legend", {}, "Visuel de l’activité"), upload, preview,
+    element("details", { class: "advanced-fields" }, element("summary", {}, "Utiliser une adresse d’image"), element("div", { class: "spaced" }, imageUrl)));
 }
 
 function optionsField(activity) {
@@ -1156,6 +1427,8 @@ $("skip-link").addEventListener("click", (event) => {
   $("dashboard").scrollIntoView();
 });
 $("editor-close").addEventListener("click", () => $("editor").close());
+$("student-card-close").addEventListener("click", () => $("student-card").close());
+$("student-card").addEventListener("close", () => { studentVersion += 1; $("student-card-content").replaceChildren(); });
 $("editor-cancel").addEventListener("click", () => $("editor").close());
 $("editor").addEventListener("cancel", (event) => {
   if ($("editor-submit").disabled) event.preventDefault();
@@ -1185,6 +1458,7 @@ $("editor-form").addEventListener("submit", async (event) => {
 });
 $("new-button").addEventListener("click", () => {
   if (state.view === "activites") editActivity();
+  else if (state.view === "mediatheque") editGallery();
   else editSession();
 });
 $("session-select").addEventListener("change", (event) => selectSession(event.currentTarget.value));
@@ -1203,7 +1477,7 @@ $("refresh").addEventListener("click", async (event) => {
 $("login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  const submit = form.querySelector("button");
+  const submit = form.querySelector('button[type="submit"]');
   submit.disabled = true;
   showMessage($("login-error"), "");
   try {
@@ -1212,6 +1486,7 @@ $("login-form").addEventListener("submit", async (event) => {
       password: form.elements.password.value,
     });
     form.reset();
+    setPasswordVisible(false);
     configureLogin(session);
     await showDashboard(session.admin);
     if (authenticated) $("dashboard").focus();
@@ -1221,6 +1496,13 @@ $("login-form").addEventListener("submit", async (event) => {
     submit.disabled = false;
   }
 });
+function setPasswordVisible(visible) {
+  $("admin-password").type = visible ? "text" : "password";
+  $("password-visibility").textContent = visible ? "Masquer" : "Afficher";
+  $("password-visibility").setAttribute("aria-pressed", String(visible));
+  $("password-visibility").setAttribute("aria-label", visible ? "Masquer le mot de passe" : "Afficher le mot de passe");
+}
+$("password-visibility").addEventListener("click", () => setPasswordVisible($("admin-password").type === "password"));
 $("logout").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true;

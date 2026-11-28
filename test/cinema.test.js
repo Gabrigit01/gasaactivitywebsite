@@ -206,7 +206,7 @@ for (const dialect of ['sqlite', 'postgres']) {
       await db.close();
       if (directory?.startsWith(join(tmpdir(), 'gasa-cinema-test-'))) await rm(directory, { recursive: true, force: true });
     });
-    await db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL);");
+    await db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL, announcement TEXT);");
     await db.prepare('INSERT INTO sessions (id, title, status) VALUES (?, ?, ?)').run('published', 'Projection campus', 'published');
     await db.prepare('INSERT INTO sessions (id, title, status) VALUES (?, ?, ?)').run('draft', 'Séance secrète', 'draft');
     await db.prepare('INSERT INTO sessions (id, title, status) VALUES (?, ?, ?)').run('archived', 'Projection archivée', 'archived');
@@ -282,6 +282,41 @@ for (const dialect of ['sqlite', 'postgres']) {
     assert.equal(playing.response.status, 200);
     assert.equal(playing.data.cinema.clipUrl, input.clipUrl);
     assert.match(playing.response.headers.get('cache-control'), /private, no-store/);
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    for (const announcement of [
+      JSON.stringify({ mode: 'normal', date: future }),
+      JSON.stringify({ mode: 'surprise', date: future }),
+      '{annonce corrompue', JSON.stringify({ mode: 'normal', date: 'date invalide' }),
+      JSON.stringify({ mode: 'normal' }), 'null', '[]',
+    ]) {
+      await db.prepare('UPDATE sessions SET announcement=? WHERE id=?').run(announcement, 'published');
+      const hiddenCatalog = await request('/cinema');
+      assert.equal(hiddenCatalog.response.status, 200);
+      assert.deepEqual(hiddenCatalog.data.items, [], 'une séance future ou invalide ne paraît pas dans le catalogue');
+      const authenticatedCatalog = await request('/cinema', { headers: { 'x-student': 'yes' } });
+      assert.deepEqual(authenticatedCatalog.data.items, [], 'la connexion ne contourne pas la date de la séance');
+      const unavailable = await request('/sessions/published/cinema', { headers: { 'x-student': 'yes' } });
+      assert.equal(unavailable.response.status, 404);
+      for (const secret of [input.title, input.clipUrl, input.fullUrl, 'Projection campus']) {
+        assert.equal(JSON.stringify(hiddenCatalog.data).includes(secret), false);
+        assert.equal(JSON.stringify(unavailable.data).includes(secret), false);
+      }
+      assert.deepEqual(await cinema.readForSession('published'), beforeFailure,
+        'l’aperçu administrateur conserve la configuration avant la séance');
+    }
+    await db.prepare('UPDATE sessions SET announcement=? WHERE id=?').run(
+      JSON.stringify({ mode: 'normal', date: new Date(Date.now() - 3_600_000).toISOString() }), 'published');
+    const availableAfter = await request('/sessions/published/cinema', { headers: { 'x-student': 'yes' } });
+    assert.equal(availableAfter.response.status, 200, 'l’extrait devient disponible après la séance annoncée');
+    assert.equal(availableAfter.data.cinema.clipUrl, input.clipUrl);
+    assert.equal(availableAfter.data.cinema.fullUrl, input.fullUrl);
+    const catalogAfter = await request('/cinema');
+    assert.equal(catalogAfter.data.items.length, 1);
+    assert.equal(catalogAfter.data.items[0].title, input.title);
+    assert.equal(catalogAfter.data.items[0].fullUrl, input.fullUrl);
+    await db.prepare('UPDATE sessions SET announcement=NULL WHERE id=?').run('published');
+    assert.equal((await request('/sessions/published/cinema', { headers: { 'x-student': 'yes' } })).response.status, 200,
+      'une séance publiée sans annonce reste accessible');
     assert.equal((await request('/sessions/draft/cinema', { headers: { 'x-student': 'yes' } })).response.status, 404);
     assert.equal((await request('/admin/sessions/archived/cinema', { method: 'POST', body: input,
       headers: { 'x-admin': 'edit' } })).response.status, 403, 'une archive reste réservée au responsable');

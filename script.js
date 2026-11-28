@@ -565,16 +565,30 @@ function setupParallax(hero) {
   }).observe(hero);
 }
 
-function setupGallery() {
+async function setupGallery() {
   const gallery = $("galerie");
   if (gallery.hidden) return;
 
   const rail = $("gallery-rail");
+  try {
+    const response = await fetch('/api/gallery', { cache: 'no-store', credentials: 'same-origin' });
+    if (response.ok) {
+      const data = await response.json();
+      for (const item of data.items || []) {
+        const slide = document.createElement('figure'); slide.className = 'gallery-slide';
+        const media = document.createElement(item.type === 'video' ? 'video' : 'img');
+        media.src = item.url;
+        if (item.type === 'video') { media.controls = true; media.preload = 'metadata'; media.playsInline = true; media.setAttribute('aria-label', item.title); }
+        else { media.alt = item.alt || item.title; media.loading = 'lazy'; media.decoding = 'async'; }
+        const caption = document.createElement('figcaption'); caption.className = 'visually-hidden'; caption.textContent = item.title;
+        slide.append(media, caption); rail.append(slide);
+      }
+    }
+  } catch { /* The initial campus memories remain available during an outage. */ }
   const controls = $("gallery-controls");
   const toggle = $("gallery-play");
   const slides = [...rail.children];
-  const video = rail.querySelector("video");
-  const videoSlide = video.closest(".gallery-slide");
+  const videos = [...rail.querySelectorAll("video")];
   let visible = false;
   let hovering = false;
   let paused = false;
@@ -607,15 +621,15 @@ function setupGallery() {
     const focused = document.activeElement;
     const hasFocus = gallery.contains(focused) && !(focused === toggle && resumedFromToggle);
     if (!visible || hovering || paused || reducedMotion.matches || document.hidden
-      || hasFocus || !video.paused || settledTimer) return;
-    autoTimer = window.setTimeout(() => advance(1, false), 6000);
+      || hasFocus || videos.some(video => !video.paused) || settledTimer) return;
+    autoTimer = window.setTimeout(() => advance(1, false), 4500);
   }
 
   function showSlide(index, announce) {
     target = index;
     rail.scrollTo({
       left: slideOffset(index),
-      behavior: reducedMotion.matches || Math.abs(index - current) > 1 ? "instant" : "smooth",
+      behavior: reducedMotion.matches ? "instant" : "smooth",
     });
     if (announce) {
       const title = slides[index].querySelector("figcaption").textContent;
@@ -659,9 +673,11 @@ function setupGallery() {
     settledTimer = window.setTimeout(() => {
       settledTimer = 0;
       target = null;
-      const videoBounds = video.getBoundingClientRect();
       const railBounds = rail.getBoundingClientRect();
-      if (videoBounds.right <= railBounds.left + 2 || videoBounds.left >= railBounds.right - 2) video.pause();
+      for (const video of videos) {
+        const videoBounds = video.getBoundingClientRect();
+        if (videoBounds.right <= railBounds.left + 2 || videoBounds.left >= railBounds.right - 2) video.pause();
+      }
       scheduleAdvance();
     }, 160);
   }, { passive: true });
@@ -678,9 +694,9 @@ function setupGallery() {
     if (event.target === toggle) resumedFromToggle = false;
     queueMicrotask(scheduleAdvance);
   });
-  for (const event of ["play", "pause", "ended"]) {
+  for (const video of videos) for (const event of ["play", "pause", "ended"]) {
     video.addEventListener(event, () => {
-      videoSlide.classList.toggle("is-playing", !video.paused && !video.ended);
+      video.closest('.gallery-slide').classList.toggle("is-playing", !video.paused && !video.ended);
       scheduleAdvance();
     });
   }

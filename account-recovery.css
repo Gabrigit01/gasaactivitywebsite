@@ -1,45 +1,209 @@
-/* Password controls share the account dialog's theme and stay scoped to it. */
-#student-dialog [hidden] { display: none !important; }
-#student-recovery-form, #student-recovery-form label { display: grid; gap: 7px; }
-#student-recovery-form { gap: 14px; }
-#student-recovery-form label { font-size: .88rem; font-weight: 650; }
-#student-recovery-form input {
-  min-width: 0;
-  width: 100%;
-  min-height: 45px;
-  padding: 9px 12px;
-  border: 1px solid var(--field-line, #ffffff4f);
-  border-radius: 9px;
-  background: var(--field, #0a0c12);
-  color: var(--text);
-  font: inherit;
+/* Account presentation is scoped so the campus pages keep their own layout. */
+#student-dialog {
+  --auth-paper: rgba(250, 253, 252, .96);
+  --auth-text: #183139;
+  --auth-muted: #52676d;
+  --auth-line: #cad8d7;
+  --auth-field: rgba(255, 255, 255, .68);
+  --auth-primary: #174e52;
+  --auth-primary-ink: #fff;
+  width: min(920px, calc(100% - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid #ffffff6b;
+  border-radius: 25px;
+  background: transparent;
+  color: var(--auth-text);
+  box-shadow: 0 28px 100px #03151f70;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
-#student-dialog input:focus-visible, #student-dialog button:focus-visible {
-  outline: 3px solid var(--amber, #f8be5c);
+:root[data-student-theme="dark"] #student-dialog {
+  --auth-paper: rgba(16, 29, 39, .96);
+  --auth-text: #edf5f4;
+  --auth-muted: #b3c7ca;
+  --auth-line: #526873;
+  --auth-field: rgba(8, 23, 33, .65);
+  --auth-primary: #b4e6d8;
+  --auth-primary-ink: #122f35;
+  border-color: #a2c2d447;
+}
+#student-dialog::backdrop { background: #04141fba; backdrop-filter: blur(8px); }
+#student-dialog[open] { animation: student-auth-enter .32s cubic-bezier(.22, 1, .36, 1) both; }
+#student-dialog [hidden] { display: none !important; }
+#student-dialog .student-auth-shell {
+  display: grid;
+  grid-template-columns: .85fr 1.15fr;
+  min-height: 570px;
+  border-radius: inherit;
+  background: var(--auth-paper);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  transform: perspective(1800px) rotateX(var(--auth-tilt-x, 0deg)) rotateY(var(--auth-tilt-y, 0deg));
+  transform-origin: center;
+  transition: transform .2s ease;
+  isolation: isolate;
+}
+#student-dialog .student-auth-aside {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 35px;
+  overflow: hidden;
+  color: #f7fffc;
+  background: radial-gradient(ellipse at 80% 22%, #6ec7c044, transparent 64%), linear-gradient(155deg, #123447, #17625d);
+  border-radius: 24px 0 0 24px;
+  transition: background .5s ease;
+}
+#student-dialog[data-account-view="register"] .student-auth-aside {
+  background: radial-gradient(ellipse at 80% 22%, #c1d49d36, transparent 64%), linear-gradient(155deg, #153d32, #436b52);
+}
+#student-dialog:is([data-account-view="forgot"], [data-account-view="reset"], [data-account-view="change"]) .student-auth-aside {
+  background: radial-gradient(ellipse at 80% 22%, #8abbdc38, transparent 64%), linear-gradient(155deg, #1c2c47, #315f77);
+}
+#student-dialog .student-auth-brand { position: relative; z-index: 1; font-size: .8rem; font-weight: 800; letter-spacing: .14em; }
+#student-dialog .student-auth-brand span { margin-left: 7px; color: #c7efde; }
+#student-dialog .student-auth-orbit { width: min(100%, 235px); margin: 25px auto; }
+#student-dialog .student-auth-orbit svg { display: block; width: 100%; stroke: #e9fff37a; stroke-width: .9; }
+#student-dialog .student-orbit-dot { fill: #d4f4cf; stroke: #ffffffa6; }
+#student-dialog .student-auth-editorial { position: relative; z-index: 1; }
+#student-dialog .student-auth-kicker { margin-bottom: 13px; color: #d0ebdf; font-size: .63rem; font-weight: 750; letter-spacing: .15em; }
+#student-dialog #student-auth-heading { max-width: 310px; font: 650 clamp(1.8rem, 3.5vw, 2.65rem)/1.07 var(--font-display); letter-spacing: -.04em; }
+#student-dialog #student-auth-copy { margin-top: 17px; color: #e0efeb; font-size: .88rem; line-height: 1.7; }
+#student-dialog .student-auth-footnote { margin-top: 31px; padding-top: 17px; border-top: 1px solid #ffffff38; color: #d0e7df; font-size: .73rem; }
+#student-dialog .student-auth-particles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+#student-dialog .student-auth-particles span {
+  position: absolute;
+  left: calc(9% + var(--particle) * 11%);
+  top: calc(12% + var(--particle) * 10%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #e2fff2;
+  opacity: .32;
+  animation: student-auth-particle 12s ease-in-out infinite;
+  animation-delay: calc(var(--particle) * -1.4s);
+}
+#student-dialog:not([open]) .student-auth-particles span { animation-play-state: paused; }
+#student-dialog .student-auth-content { min-width: 0; padding: 31px 35px 33px; perspective: 1400px; }
+#student-dialog .student-dialog-head { align-items: flex-start; gap: 15px; margin-bottom: 26px; }
+#student-dialog .student-dialog-head h2 { padding-top: 8px; color: var(--auth-text); font: 700 clamp(1.3rem, 2.3vw, 1.65rem)/1.22 var(--font-display); letter-spacing: -.035em; }
+#student-dialog #student-dialog-close { flex: 0 0 auto; min-height: 44px; padding: 7px 11px; border-radius: 999px; font-size: .75rem; }
+#student-dialog .student-auth-body { transform-origin: left center; backface-visibility: hidden; }
+#student-dialog .student-auth-flip-stage { position: relative; transform-style: preserve-3d; }
+#student-dialog .student-auth-flip-front, #student-dialog .student-auth-flip-back { position: absolute; inset: 0 0 auto; width: 100%; backface-visibility: hidden; transform-origin: center; }
+#student-dialog .student-auth-flip-front { pointer-events: none; transform: rotateY(0deg); }
+#student-dialog .student-auth-flip-back { transform: rotateY(180deg); }
+#student-dialog .student-dialog-note { color: var(--auth-muted); font-size: .81rem; line-height: 1.6; }
+#student-dialog #student-dialog-context { margin-bottom: 19px; padding-left: 12px; border-left: 2px solid var(--auth-line); }
+#student-dialog #student-form, #student-dialog #student-recovery-form { display: grid; gap: 17px; }
+#student-dialog .student-auth-form-copy { display: grid; gap: 17px; }
+#student-dialog label { display: grid; min-width: 0; gap: 7px; color: var(--auth-text); font-size: .82rem; font-weight: 650; }
+#student-dialog input:not([type="hidden"]), #student-dialog select {
+  width: 100%;
+  min-width: 0;
+  min-height: 47px;
+  padding: 11px 12px;
+  border: 1px solid var(--auth-line);
+  border-radius: 10px;
+  background: var(--auth-field);
+  color: var(--auth-text);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 450;
+  line-height: 1.35;
+  transition: border-color .18s, background .18s;
+}
+#student-dialog select option { background: var(--auth-paper); color: var(--auth-text); }
+#student-dialog input:hover, #student-dialog select:hover { border-color: #7b999d; }
+#student-dialog input:focus-visible, #student-dialog select:focus-visible, #student-dialog button:focus-visible {
+  outline: 3px solid #5cc8cf;
   outline-offset: 3px;
 }
+#student-dialog .student-auth-field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 13px; min-width: 0; }
+#student-dialog fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+#student-dialog .student-registration-academic { display: grid; gap: 10px; }
+#student-dialog .student-registration-academic > legend { margin-bottom: 11px; color: var(--auth-muted); font-size: .72rem; font-weight: 750; letter-spacing: .04em; }
+#student-dialog .student-auth-hint { color: var(--auth-muted); font-size: .72rem; font-weight: 450; }
+#student-dialog .student-password-field { position: relative; display: block; }
+#student-dialog .student-password-field input { padding-right: 54px; }
+#student-dialog .student-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  color: var(--auth-muted);
+  background: transparent;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+#student-dialog .student-password-toggle:hover { color: var(--auth-text); background: #739e9c14; }
+#student-dialog .student-eye-slash { opacity: 0; }
+#student-dialog .student-password-toggle[aria-pressed="true"] .student-eye-slash { opacity: 1; }
+#student-dialog .button { min-height: 46px; border-radius: 999px; font-size: .82rem; font-weight: 700; }
+#student-dialog .button-dark { color: var(--auth-primary-ink); background: var(--auth-primary); }
+#student-dialog .button-dark:hover { filter: brightness(1.1); }
+#student-dialog .button-outline { color: var(--auth-text); border-color: var(--auth-line); background: transparent; }
+#student-dialog .button-outline:hover { background: #739e9c14; }
+#student-dialog #student-submit::before, #student-dialog #student-submit::after { display: none !important; content: none !important; }
+#student-dialog #student-form > .student-dialog-actions { display: grid; grid-template-columns: 1fr; gap: 8px; }
+#student-dialog .student-auth-form-copy > .student-dialog-actions { display: grid; grid-template-columns: 1fr; gap: 8px; }
+#student-dialog #student-mode { border-color: transparent; color: var(--auth-muted); font-weight: 600; }
+#student-dialog .student-dialog-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 #student-dialog .student-password-link {
   justify-self: start;
   min-height: 44px;
-  padding: 7px 0;
+  padding: 6px 0;
   background: transparent;
   border: 0;
-  color: var(--text);
+  color: var(--auth-muted);
   text-decoration: underline;
-  text-underline-offset: 3px;
+  text-underline-offset: 4px;
   font: inherit;
-  font-size: .88rem;
+  font-size: .8rem;
   cursor: pointer;
 }
-#student-dialog #student-password-change { margin: 8px 8px 8px 0; }
-#student-dialog .student-account-status {
-  margin-top: 14px;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  color: var(--text);
-  background: var(--green-bg, var(--surface));
-  font-size: .9rem;
-  line-height: 1.5;
+#student-dialog #student-forgot { justify-self: center; margin-top: -9px; }
+#student-dialog #student-registration-privacy { margin: 0; font-size: .74rem; }
+#student-dialog #student-profile-name { color: var(--auth-text); font: 700 1.3rem/1.2 var(--font-display); }
+#student-dialog #student-profile-email { margin-top: 6px; overflow-wrap: anywhere; }
+#student-dialog .student-academic-form { display: grid; gap: 13px; margin: 24px 0; padding: 20px 0; border-block: 1px solid var(--auth-line); }
+#student-dialog .student-academic-form h3 { color: var(--auth-text); font-size: .98rem; }
+#student-dialog .student-academic-form .student-dialog-note { margin-bottom: 0; }
+#student-dialog #student-password-change { margin: 0 5px 9px 0; }
+#student-dialog .student-account-status { margin-top: 17px; padding: 11px 13px; border: 1px solid var(--auth-line); border-radius: 10px; color: var(--auth-text); background: #739e9c18; font-size: .82rem; line-height: 1.6; }
+#student-dialog #student-error { margin-top: 16px; color: #ac3325; font-size: .82rem; line-height: 1.6; }
+:root[data-student-theme="dark"] #student-dialog #student-error { color: #ffb8a5; }
+#student-dialog button:disabled { opacity: .58; cursor: wait; }
+#student-dialog input:disabled, #student-dialog select:disabled { opacity: .65; }
+#student-dialog .student-auth-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@keyframes student-auth-enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes student-auth-particle { 0%, 100% { transform: translate3d(0, 0, 0); opacity: .18; } 50% { transform: translate3d(6px, -20px, 0); opacity: .5; } }
+@media (max-width: 760px) {
+  #student-dialog .student-auth-shell { grid-template-columns: .75fr 1.25fr; }
+  #student-dialog .student-auth-aside { padding: 27px; }
+  #student-dialog .student-auth-content { padding: 27px; }
 }
-#student-dialog button:disabled { opacity: .65; cursor: wait; }
+@media (max-width: 620px) {
+  #student-dialog { width: calc(100% - 20px); max-height: calc(100dvh - 20px); border-radius: 19px; }
+  #student-dialog .student-auth-shell { display: block; min-height: 0; transform: none; }
+  #student-dialog .student-auth-aside { display: none; }
+  #student-dialog .student-auth-content { padding: 24px 21px 27px; }
+  #student-dialog .student-dialog-head { margin-bottom: 23px; }
+}
+@media (max-width: 370px) {
+  #student-dialog .student-auth-field-grid { grid-template-columns: 1fr; }
+  #student-dialog .student-auth-content { padding-inline: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #student-dialog, #student-dialog *, #student-dialog::backdrop { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  #student-dialog .student-auth-shell, #student-dialog .student-auth-body { transform: none !important; }
+}
