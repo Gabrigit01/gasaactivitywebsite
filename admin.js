@@ -4,7 +4,7 @@ const $ = (id) => document.getElementById(id);
 const views = {
   vue: { title: "Vue d’ensemble", intro: "Suivez les votes et les retours par séance." },
   prioritaire: { title: "Sondage prioritaire", intro: "Quelle fréquence d’activités et quel jour conviennent aux étudiants ?" },
-  sondages: { title: "Séances et sondages", intro: "Choisissez les activités, pilotez les votes et préparez chaque séance." },
+  sondages: { title: "Gérer les séances", intro: "Retrouvez les séances à venir, en cours et passées, avec l’activité réellement retenue." },
   activites: { title: "Catalogue d’activités", intro: "Personnalisez les noms, descriptions, images et questions proposées aux étudiants." },
   mediatheque: { title: "Médiathèque des séances", intro: "Ajoutez les photos et vidéos des séances pour les retrouver sur le site étudiant." },
   cinema: { title: "Suite des films", intro: "Choisissez une séance, ajoutez son extrait de 30 minutes maximum et le lien du film complet." },
@@ -25,6 +25,7 @@ const state = {
   records: { tab: "students", q: "", kind: "", sessionId: "", page: 1 }, recordResult: null, recordsFailed: false,
   programs: null, programsFailed: false, gallery: null, galleryFailed: false, gallerySessionId: "",
   systemStatus: null, systemStatusFailed: false, priorityBusy: false,
+  sessionPhase: "upcoming",
 };
 let requestVersion = 0;
 let priorityVersion = 0;
@@ -38,6 +39,24 @@ let authenticated = false;
 let editorAction;
 
 const roleLabels = { owner: "Responsable", organizer: "Organisation", viewer: "Consultation" };
+const phaseLabels = { upcoming: "À venir", current: "En cours", past: "Passées" };
+
+function sessionPhase(session) {
+  if (Object.hasOwn(phaseLabels, session?.phase)) return session.phase;
+  if (session?.status === "archived" || (session?.feedbackOpen && !session?.voteOpen)) return "past";
+  return session?.voteOpen || session?.status === "draft" ? "upcoming" : "current";
+}
+
+function sessionActivity(session) {
+  const activityId = session?.activityId || session?.announcement?.activityId;
+  return state.activities.find((activity) => activity.id === activityId);
+}
+
+function isCinemaSession(session) {
+  const activity = sessionActivity(session);
+  const name = (activity?.name || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return activity?.id === "cinema" || /\bcinema\b/.test(name);
+}
 
 function can(capability) {
   return state.admin?.capabilities?.includes(capability) === true;
@@ -187,15 +206,17 @@ function sessionApi(id, suffix = "") {
 function syncSelection() {
   const select = $("session-select");
   select.replaceChildren(...sessionChoices(state.sessionId));
+  if (state.sessions.length && !state.sessionId) select.prepend(element("option", { value: "", selected: true }, "Choisir une séance…"));
   if (!state.sessions.length) select.replaceChildren(element("option", {}, "Aucune séance"));
   select.disabled = !state.sessions.length;
 }
 
 function sessionChoices(selected) {
-  return [["published", "Séances publiées"], ["draft", "Brouillons"], ["archived", "Séances archivées"]].map(([value, label]) => {
-    const sessions = state.sessions.filter((session) => session.status === value);
+  return Object.entries(phaseLabels).map(([value, label]) => {
+    const sessions = state.sessions.filter((session) => sessionPhase(session) === value);
     return sessions.length ? element("optgroup", { label }, sessions.map((session) =>
-      element("option", { value: session.id, selected: selected === session.id }, session.title))) : null;
+      element("option", { value: session.id, selected: selected === session.id }, session.title
+        + (session.status === "draft" ? " · Brouillon" : session.status === "archived" ? " · Archivée" : "")))) : null;
   }).filter(Boolean);
 }
 
@@ -238,6 +259,7 @@ async function loadDashboard(preferred = state.sessionId) {
   const defaultSession = sessions.find((session) => session.status === "published" && session.voteOpen)
     || sessions.find((session) => session.status === "published") || sessions[0];
   state.sessionId = sessions.some((session) => session.id === preferred) ? preferred : defaultSession?.id || "";
+  if (currentSession()) state.sessionPhase = sessionPhase(currentSession());
   syncSelection();
   await Promise.all([loadResults(), loadPriority(),
     state.view === "participations" && can("trace") ? loadRecords() : Promise.resolve(),
@@ -642,9 +664,9 @@ function galleryView() {
     : items.length ? element("div", { class: "catalog" }, cards) : empty("Aucun média pour cette sélection", can("edit") ? "Importez une photo ou une vidéo et associez-la à sa séance." : "Les souvenirs des séances seront affichés ici.")];
 }
 
-function editGallery() {
+function editGallery(session) {
   if (!state.sessions.length) { showMessage($("app-message"), "Créez une séance avant d’ajouter ses médias.", true); return; }
-  const choice = sessionField("Séance associée", "sessionId", state.gallerySessionId || state.sessionId, "Choisir une séance…");
+  const choice = sessionField("Séance associée", "sessionId", session?.id || state.gallerySessionId || state.sessionId, "Choisir une séance…");
   choice.querySelector("select").required = true;
   const file = field("Fichier à importer", "input", { type: "file", name: "file", required: true, accept: "image/jpeg,image/png,image/webp,video/mp4" }, null,
     "Photo JPG, PNG ou WebP : 5 Mo maximum. Vidéo MP4 : 50 Mo maximum.");
@@ -670,7 +692,7 @@ function editGallery() {
     validateGalleryFile(data.get("file"));
     await api("/api/admin/gallery", "POST", data);
     state.gallery = null;
-    return { message: "Média ajouté à la médiathèque." };
+    return { message: "Média ajouté à la médiathèque.", sessionId: data.get("sessionId") };
   });
 }
 
@@ -749,11 +771,14 @@ function systemStatusPanel() {
 
 function sessionControls(session) {
   const activities = (session.activityIds || []).map((id) => state.activities.find((activity) => activity.id === id)).filter(Boolean);
-  return panel("Pilotage de la séance", "Les activités ci-dessous constituent les choix du sondage étudiant.",
+  const activity = sessionActivity(session);
+  return panel(session.title, "Activité retenue : " + (activity?.name || "À définir après le vote"),
+    tag(phaseLabels[sessionPhase(session)], sessionPhase(session) === "current" ? "live" : "active"),
+    element("p", { class: "muted spaced" }, "Propositions soumises au vote :"),
     element("div", { class: "activity-tags" }, activities.map((activity) => tag(activity.name + (activity.archived ? " · archivée" : "")))),
     canEditSession(session) && element("div", { class: "button-row spaced" },
       button("Modifier la séance et ses activités", () => editSession(session)),
-      session.status !== "archived" && button(session.voteOpen && session.status === "published" ? "Mettre le vote en pause" : "Activer le vote", () => changeSessionVote(session),
+      session.status !== "archived" && sessionPhase(session) !== "past" && button(session.voteOpen && session.status === "published" ? "Mettre le vote en pause" : "Activer le vote", () => changeSessionVote(session),
         { style: session.voteOpen && session.status === "published" ? "outline" : "primary" }),
       can("archive") && session.status !== "archived" && button("Arrêter et archiver", () => stopSession(session), { style: "danger" }),
       button("Préparer l’annonce", () => { state.settingsTab = "annonce"; navigate("parametres"); })));
@@ -818,7 +843,7 @@ function cinemaForm(session) {
     } catch (error) { reportError(error); }
     finally { submit.disabled = false; submit.textContent = "Vérifier et enregistrer l’extrait"; }
   }},
-    field("Titre de la projection", "input", { name: "title", required: true, maxlength: 160 }, cinema?.title || "Projection cinéma"),
+    field("Titre de la projection", "input", { name: "title", required: true, maxlength: 160 }, cinema?.title || session.title || "Extrait de la séance"),
     field("URL HTTPS directe du fichier MP4", "input", { name: "clipUrl", type: "url", required: true, maxlength: 2000 }, cinema?.clipUrl,
       "Hébergez l’extrait sur votre service vidéo. La durée réelle est vérifiée à l’enregistrement : 30 minutes maximum."),
     field("Lien du film complet (facultatif)", "input", { name: "fullUrl", type: "url", maxlength: 2000 }, cinema?.fullUrl),
@@ -877,18 +902,26 @@ function overview(session, results) {
 }
 
 function surveyView(session, results) {
-  const list = element("div", { class: "session-list" }, state.sessions.map((entry) => {
+  const phase = state.sessionPhase;
+  const sessions = state.sessions.filter((entry) => sessionPhase(entry) === phase);
+  const tabs = tabBar(Object.entries(phaseLabels).map(([value, label]) => [value,
+    label + " (" + state.sessions.filter((entry) => sessionPhase(entry) === value).length + ")"]), phase, selectSessionPhase);
+  const list = element("div", { class: "session-list" }, sessions.map((entry) => {
     const [label, style] = status(entry);
+    const activity = sessionActivity(entry);
     return element("div", { class: "session-row" },
       element("div", {}, element("h3", {}, entry.title), tag(label, style),
-        element("p", { class: "muted spaced" }, (entry.activityIds || []).map((id) => state.activities.find((activity) => activity.id === id)?.name).filter(Boolean).join(" · ") || "Aucune activité sélectionnée")),
+        element("p", { class: "session-activity spaced" }, activity?.name || "Activité à définir après le vote")),
       element("div", { class: "button-row" },
         entry.id === state.sessionId ? null : button("Consulter", () => selectSession(entry.id)),
-        canEditSession(entry) && button("Modifier", () => editSession(entry))));
+        canEditSession(entry) && button("Modifier", () => editSession(entry)),
+        phase === "past" && can("edit") && button("Ajouter photos/vidéos", () => editGallery(entry)),
+        phase === "past" && isCinemaSession(entry) && button("Suite du film", () => { selectSession(entry.id); navigate("cinema"); })));
   }));
-  const items = [panel("Toutes les séances", null, state.sessions.length ? list : empty("Aucun sondage créé"))];
+  const items = [tabs, panel("Séances · " + phaseLabels[phase], "Les séances affichées sont celles créées dans l’administration.",
+    sessions.length ? list : empty("Aucune séance dans cette période", can("edit") ? "Utilisez Nouvelle séance pour en préparer une." : null))];
   if (!session) return items;
-  items.push(sessionControls(session), cinemaPanel(session), overallPanel(results));
+  items.push(sessionControls(session), overallPanel(results));
   const detailed = results?.votes.filter((entry) => entry.options.length) || [];
   if (detailed.length) {
     const selector = element("select", { "aria-label": "Activité à détailler" }, detailed.map((entry) =>
@@ -1245,9 +1278,17 @@ function archiveActivity(activity) {
 
 function editSession(session) {
   const selected = new Set(session?.activityIds || state.activities.filter((activity) => !activity.archived).map((activity) => activity.id));
+  const actualActivityId = session?.activityId || session?.announcement?.activityId || "";
+  const phase = selectField("Période", "phase", Object.entries(phaseLabels), session ? sessionPhase(session) : "upcoming",
+    "Une séance passée ferme le vote. Elle peut rester publiée pour partager ses médias et recueillir des avis.");
+  const actualActivity = selectField("Activité de la séance", "activityId", [["", "À définir après le vote"],
+    ...state.activities.filter((activity) => !activity.archived || activity.id === actualActivityId)
+      .map((activity) => [activity.id, activity.name + (activity.archived ? " (archivée)" : "")])], actualActivityId,
+    "L’activité retenue pour cette séance. Les propositions du sondage restent distinctes ci-dessous.");
+  actualActivity.querySelector("select").required = false;
   const eligible = state.activities.filter((activity) => !activity.archived || selected.has(activity.id));
   const activities = element("fieldset", {},
-    element("legend", {}, "Activités proposées au vote"),
+    element("legend", {}, "Propositions soumises au vote"),
     element("p", { class: "muted" }, "Chaque activité cochée apparaît comme un choix sur le site étudiant."),
     eligible.length > 0 && element("div", { class: "button-row spaced" }, button("Tout sélectionner", () => activities.querySelectorAll("input").forEach((input) => { input.checked = true; })),
       button("Tout désélectionner", () => activities.querySelectorAll("input").forEach((input) => { input.checked = false; }))),
@@ -1257,9 +1298,18 @@ function editSession(session) {
   const availability = element("fieldset", {}, element("legend", {}, "Formulaires de la séance"),
     checkbox("Ouvrir le vote", "voteOpen", session?.voteOpen ?? eligible.length > 0),
     checkbox("Recueillir les avis", "feedbackOpen", session?.feedbackOpen ?? false));
+  const syncVote = () => {
+    const vote = availability.querySelector("[name=voteOpen]");
+    const past = phase.querySelector("select").value === "past";
+    if (past) vote.checked = false;
+    vote.disabled = past;
+  };
+  phase.addEventListener("change", syncVote);
+  syncVote();
   const fields = [
     field("Titre de la séance", "input", { name: "title", required: true, maxlength: 120 }, session?.title),
     field("Texte visible par les étudiants", "textarea", { name: "description", maxlength: 500 }, session?.description),
+    element("div", { class: "form-pair" }, phase, actualActivity),
     selectField("Publication", "status", [
       (session?.status !== "published" || can("archive")) && ["draft", "Brouillon"],
       ["published", "Publiée"],
@@ -1267,16 +1317,17 @@ function editSession(session) {
     ].filter(Boolean), session?.status || "draft", "Une séance publiée est accessible sur le site étudiant et par ses liens de partage."),
     activities, availability,
   ];
-  editor(session ? "Modifier le sondage" : "Nouveau sondage", session ? "Enregistrer" : "Créer la séance", fields, async (data) => {
+  editor(session ? "Modifier la séance" : "Nouvelle séance", session ? "Enregistrer" : "Créer la séance", fields, async (data) => {
     const activityIds = data.getAll("activityIds");
     const voteOpen = data.has("voteOpen");
     if (voteOpen && !activityIds.length) throw new Error("Sélectionnez une activité pour ouvrir le vote.");
     const values = {
       title: data.get("title"), description: data.get("description"), status: data.get("status"),
+      phase: data.get("phase"), activityId: data.get("activityId") || null,
       activityIds, voteOpen, feedbackOpen: data.has("feedbackOpen"),
     };
     const saved = await api(session ? sessionApi(session.id) : "/api/admin/sessions", session ? "PUT" : "POST", values);
-    return { message: session ? "Sondage mis à jour." : "Séance créée.", sessionId: saved.id || session?.id };
+    return { message: session ? "Séance mise à jour." : "Séance créée.", sessionId: saved.id || session?.id };
   });
 }
 
@@ -1299,8 +1350,8 @@ function editAnnouncement(session) {
     showMessage($("app-message"), "Ajoutez d’abord une activité dans le catalogue.", true);
     return;
   }
-  const choice = selectField("Activité retenue", "activityId", catalog.map((activity) => [activity.id, activity.name]),
-    current?.activityId || catalog[0].id);
+  const choice = selectField("Activité retenue", "activityId", [["", "Choisir l’activité retenue…"], ...catalog.map((activity) => [activity.id, activity.name])],
+    session.activityId || current?.activityId || "");
   const mode = selectField("Mode d’annonce", "mode", [["normal", "Standard"], ["surprise", "Activité mystère"]], current?.mode || "normal");
   const date = field("Date et heure à Cotonou", "input", {
     type: "datetime-local", name: "date", required: true, min: "1000-01-01T00:00", max: "9999-12-31T23:59",
@@ -1366,9 +1417,24 @@ function removeAnnouncement(session) {
 
 async function selectSession(id) {
   state.sessionId = id;
+  if (currentSession()) state.sessionPhase = sessionPhase(currentSession());
   $("session-select").value = id;
   showMessage($("app-message"), "");
   await loadResults();
+}
+
+function selectSessionPhase(phase) {
+  state.sessionPhase = phase;
+  const selected = currentSession();
+  if (selected && sessionPhase(selected) === phase) { render(); return; }
+  const session = state.sessions.find((entry) => sessionPhase(entry) === phase);
+  if (session) { selectSession(session.id); return; }
+  state.sessionId = "";
+  state.results = null;
+  requestVersion += 1;
+  syncSelection();
+  $("content").setAttribute("aria-busy", "false");
+  render();
 }
 
 function configureLogin(session) {

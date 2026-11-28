@@ -158,6 +158,27 @@ for (const dialect of ['sqlite', 'postgres']) {
     assert.equal(closed.status, 409);
     assert.match(closed.data.error, /fermé/);
     assert.equal((await owner.request('/api/admin/sessions/prochaine-seance', { method: 'PUT', body: { voteOpen: true } })).status, 200);
+    const managed = await owner.request('/api/admin/sessions', {method:'POST',body:{
+      title:'Rencontre débat',description:'Une séance de conférence, indépendante du cinéma.',status:'published',
+      phase:'current',activityId:'conference',activityIds:[],voteOpen:false,feedbackOpen:true,
+    }});
+    assert.equal(managed.status,201);
+    assert.equal(managed.data.activityId,'conference');
+    assert.equal(managed.data.phase,'current');
+    const managedId=managed.data.id;
+    assert.equal((await owner.request('/api/admin/sessions/'+managedId,{method:'PUT',body:{phase:'invalide'}})).status,400);
+    assert.equal((await owner.request('/api/admin/sessions/'+managedId,{method:'PUT',body:{activityId:'introuvable'}})).status,400);
+    const withAnnouncement=await owner.request('/api/admin/sessions/'+managedId,{method:'PUT',body:{announcement:{
+      activityId:'conference',mode:'normal',date:new Date(Date.now()+86400000).toISOString(),location:'Campus',
+    }}});
+    assert.equal(withAnnouncement.status,200);
+    const switched=await owner.request('/api/admin/sessions/'+managedId,{method:'PUT',body:{activityId:'hackathon'}});
+    assert.equal(switched.data.announcement.activityId,'hackathon','l’annonce suit l’activité réelle de la séance');
+    const completed=await owner.request('/api/admin/sessions/'+managedId,{method:'PUT',body:{phase:'past',voteOpen:true}});
+    assert.equal(completed.status,200);
+    assert.equal(completed.data.phase,'past');
+    assert.equal(completed.data.voteOpen,false,'une séance passée ferme son vote sans archiver sa publication');
+    assert.equal(completed.data.status,'published');
     const allActivities = (await owner.request('/api/admin/dashboard')).data.activities;
     const archived = await Promise.all(allActivities.map(activity => owner.request('/api/admin/activities/' + activity.id, {
       method: 'PUT', body: { archived: true },
@@ -177,6 +198,8 @@ for (const dialect of ['sqlite', 'postgres']) {
     const adminAfterRestart = client(origin, new Map(owner.cookies));
     const dashboard = (await adminAfterRestart.request('/api/admin/dashboard')).data;
     assert.equal(dashboard.activities.length, 7, 'redémarrage sans réinitialisation des données');
+    assert.equal(dashboard.sessions.find(s=>s.id===managedId).activityId,'hackathon');
+    assert.equal(dashboard.sessions.find(s=>s.id===managedId).phase,'past');
   });
 }
 

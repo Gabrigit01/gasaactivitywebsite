@@ -7,7 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
     && install -d -o node -g node /app/data
 
-COPY server.js database.js schema-migration.js accounts.js push.js engagement.js cinema.js student-directory.js gallery.js service-worker.js manifest.webmanifest ./
+COPY server.js database.js schema-migration.js accounts.js push.js engagement.js cinema.js student-directory.js gallery.js session-management.js service-worker.js manifest.webmanifest ./
 COPY index.html style.css script.js student-themes.css student-polls.css student-interface.js ./
 COPY account-recovery.css priority-survey.js priority-survey.css student-cinema.js student-cinema.css ./
 COPY admin.html admin.css admin.js ./

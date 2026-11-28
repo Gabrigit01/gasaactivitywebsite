@@ -13,6 +13,7 @@ import { EngagementError, installEngagement } from './engagement.js';
 import { installCinema } from './cinema.js';
 import { DirectoryError, installDirectory } from './student-directory.js';
 import { GalleryError, installGallery } from './gallery.js';
+import { installSessionFields, sessionPhase } from './session-management.js';
 
 export async function createApplication({ database, sendEmail } = {}) {
 const root = fileURLToPath(new URL('.', import.meta.url));
@@ -97,14 +98,17 @@ function activityFromRow(row) {
 
 function sessionFromRow(row) {
   if (!row) return null;
-  const { createdAt, feedbackEnabled, sort_order, ...session } = row;
-  return {
+  const { createdAt, feedbackEnabled, sort_order, activity_id, ...session } = row;
+  const result = {
     ...session,
     activityIds: JSON.parse(row.activityIds),
     voteOpen: Boolean(row.voteOpen),
     feedbackOpen: Boolean(row.feedbackOpen),
     announcement: row.announcement ? JSON.parse(row.announcement) : null,
   };
+  result.phase = sessionPhase(result);
+  result.activityId = activity_id || result.announcement?.activityId || null;
+  return result;
 }
 
 async function activities() {
@@ -150,15 +154,15 @@ async function updateActivity(activity, previous) {
 async function writeSession(session) {
   await db.prepare(`
     INSERT INTO sessions (id, title, description, status, activityIds, voteOpen, feedbackOpen,
-      feedbackEnabled, announcement, createdAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET
+      feedbackEnabled, announcement, createdAt,phase,activity_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,?,?) ON CONFLICT (id) DO UPDATE SET
       title=excluded.title, description=excluded.description, status=excluded.status,
       activityIds=excluded.activityIds, voteOpen=excluded.voteOpen, feedbackOpen=excluded.feedbackOpen,
       feedbackEnabled=CASE WHEN sessions.feedbackEnabled = 1 OR excluded.feedbackEnabled = 1 THEN 1 ELSE 0 END,
-      announcement=excluded.announcement
+      announcement=excluded.announcement,phase=excluded.phase,activity_id=excluded.activity_id
   `).run(session.id, session.title, session.description, session.status, JSON.stringify(session.activityIds),
     Number(session.voteOpen), Number(session.feedbackOpen), Number(session.feedbackOpen),
-    session.announcement ? JSON.stringify(session.announcement) : null, Date.now());
+    session.announcement ? JSON.stringify(session.announcement) : null, Date.now(),session.phase||null,session.activityId||null);
 }
 
 async function seed() {
@@ -194,12 +198,14 @@ async function seed() {
         id: 'projection-campus', title: 'Projection campus',
         description: 'Retour sur la dernière projection du campus.',
         status: 'published', activityIds: [], voteOpen: false, feedbackOpen: true, announcement: null,
+        phase:'past',activityId:'cinema',
       });
       await writeSession({
         id: 'prochaine-seance', title: 'La prochaine séance',
         description: 'Choisissez une activité, puis précisez le format que vous aimeriez.',
         status: 'published', activityIds: initialActivities.map(([id]) => id),
         voteOpen: true, feedbackOpen: false, announcement: null,
+        phase:'upcoming',activityId:null,
       });
     }
     await db.prepare("UPDATE schema_settings SET value = 1 WHERE name = 'seed'").run();
@@ -207,6 +213,7 @@ async function seed() {
   });
 }
 
+await installSessionFields(db);
 await seed();
 
 class RequestError extends Error {
@@ -318,7 +325,8 @@ async function readAnnouncement(announcement) {
   };
 }
 
-async function readSession(body, existing) {
+async function readSession(body = {}, existing) {
+  requireThat(body && typeof body==='object' && !Array.isArray(body),400,'Le formulaire de séance est invalide.');
   const { status, activityIds, title, description, voteOpen, feedbackOpen, announcement } = {
     status: 'draft', activityIds: [], ...existing, ...body,
   };
@@ -327,11 +335,26 @@ async function readSession(body, existing) {
     && activityIds.every(id => typeof id === 'string' && idPattern.test(id)),
     400, 'Choisissez des activités existantes.');
   const available = new Map((await activities()).map(activity => [activity.id, activity]));
+  const configuredAnnouncement = await readAnnouncement(announcement);
+  let activityId = Object.hasOwn(body,'activityId') ? (body.activityId===''||body.activityId===null?null:body.activityId)
+    : configuredAnnouncement?.activityId || existing?.activityId || null;
+  requireThat(activityId === null || typeof activityId === 'string' && available.has(activityId),400,'Choisissez une activité du catalogue.');
+  if (configuredAnnouncement) {
+    if (Object.hasOwn(body,'announcement')) {
+      requireThat(!Object.hasOwn(body,'activityId') || !activityId || activityId===configuredAnnouncement.activityId,400,'L’activité de la séance doit correspondre à son annonce.');
+      activityId=configuredAnnouncement.activityId;
+    } else {
+      requireThat(activityId,400,'Retirez l’annonce avant de remettre l’activité à définir.');
+      configuredAnnouncement.activityId=activityId;
+    }
+  }
+  const phase = status==='archived'?'past':body.phase ?? existing?.phase ?? sessionPhase({status,voteOpen,feedbackOpen,announcement:configuredAnnouncement});
+  requireThat(['upcoming','current','past'].includes(phase),400,'Choisissez une période de séance valide.');
   const selected = activityIds.map(id => available.get(id));
   requireThat(selected.every(Boolean), 400, 'Choisissez des activités existantes.');
   const open = readBoolean(voteOpen, 'Le vote', false);
   const ids = [...new Set(activityIds)];
-  if (open && status === 'published') {
+  if (open && phase !== 'past' && status === 'published') {
     requireThat(selected.some(activity => !activity.archived),
       400, 'Ajoutez au moins une activité active pour ouvrir le vote.');
   }
@@ -340,10 +363,11 @@ async function readSession(body, existing) {
     title: readText(title, 'le titre de la séance', 120),
     description: readText(description, 'la description', 500, false),
     status,
+    phase,activityId,
     activityIds: ids,
-    voteOpen: open,
+    voteOpen: phase==='past'?false:open,
     feedbackOpen: readBoolean(feedbackOpen, 'Les avis', false),
-    announcement: await readAnnouncement(announcement),
+    announcement: configuredAnnouncement,
   };
 }
 
@@ -824,7 +848,7 @@ api.use((_req, res) => {
 app.get('/healthz', async (_req, res) => {
   try {
     await db.prepare('SELECT 1').get();
-    res.json({ ok: true, version: '2026.11.28.2' });
+    res.json({ ok: true, version: '2026.11.28.3' });
   } catch {
     res.status(503).json({ ok: false });
   }

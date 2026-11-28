@@ -100,7 +100,7 @@
   function summary() {
     const response = configuration.responded ? configuration.response : chosen;
     const survey = configuration.survey;
-    return [survey.frequencies.find(x => x.value === response?.frequency)?.label, survey.weekdays.find(x => x.value === response?.weekday)?.label].filter(Boolean).join(' · ');
+    return [survey.frequencies.find(x => x.value === response?.frequency)?.label, survey.weekdays.find(x => x.value === response?.weekday)?.label || response?.weekdayLabel].filter(Boolean).join(' · ');
   }
   function renderReview() {
     const form = formBase('Votre préférence est prête.', summary());

@@ -160,6 +160,8 @@ h1, h2, h3, p { margin: 0; }
 .response-date, .session-row .muted { font-size: .83rem; }
 .response-comment { margin-top: 6px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .session-row h3 { font-size: 1rem; margin-bottom: 5px; overflow-wrap: anywhere; }
+.session-activity { font-size: .86rem; line-height: 1.5; color: var(--muted); }
+.session-row .button-row { justify-content: flex-end; }
 .catalog, .qr-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .catalog-card { overflow: hidden; display: flex; flex-direction: column; }
 .catalog-card img { object-fit: cover; aspect-ratio: 2.4; width: 100%; background: #ede8df; }

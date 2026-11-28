@@ -11,9 +11,10 @@ const need = (condition, message, status = 400) => { if (!condition) throw new E
 const text = (value, maximum = 300) => typeof value === 'string' ? value.trim().slice(0, maximum) : '';
 const frequencies = [{ value: 'weekly', label: 'Chaque semaine' }, { value: 'fortnightly', label: 'Toutes les deux semaines' }];
 const birthdayPurpose = 'Préparer les anniversaires et organiser des célébrations individuelles ou groupées. Les publications d’anniversaire sont facultatives et font l’objet d’un accord distinct ; l’année de naissance n’est jamais publiée.';
-const weekdays = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'].map((label, index) => ({
+const allWeekdays = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'].map((label, index) => ({
   value: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'][index], label,
 }));
+const weekdays = allWeekdays.filter(day=>day.value!=='sunday');
 
 async function addColumn(db, table, name, definition) {
   const columns = db.dialect === 'postgres'
@@ -137,7 +138,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
     const response = student && survey ? await db.prepare(`SELECT frequency,weekday,created_at AS createdAt
       FROM priority_responses WHERE survey_id = ? AND student_id = ?`).get(survey.id, student.id) : null;
     const profile = student && survey ? await db.prepare('SELECT birthdate_purpose FROM student_profiles WHERE student_id=?').get(student.id) : null;
-    res.json({ survey, responded: Boolean(response), response: response || null,
+    res.json({ survey, responded: Boolean(response), response: response ? {...response,weekdayLabel:allWeekdays.find(day=>day.value===response.weekday)?.label||response.weekday} : null,
       birthdateProvided: Boolean(profile && profile.birthdate_purpose === survey.birthdatePurpose) });
   });
 
@@ -207,7 +208,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
       ${canBirthdate(req) ? 'LEFT JOIN student_profiles profile ON profile.student_id=p.id' : ''}
       WHERE r.survey_id=? ORDER BY r.created_at DESC ${all ? '' : 'LIMIT 250'}`).all(survey.id) : [];
     return { survey, total, frequency: frequencies.map(item => ({ ...item, count: counts.filter(row => row.frequency === item.value).reduce((sum, row) => sum + row.count, 0) })),
-      weekdays: weekdays.map(item => ({ ...item, count: counts.filter(row => row.weekday === item.value).reduce((sum, row) => sum + row.count, 0) })), responses };
+      weekdays: allWeekdays.filter(item=>item.value!=='sunday'||counts.some(row=>row.weekday==='sunday')).map(item => ({ ...item, label:item.value==='sunday'?'Dimanche (ancien choix)':item.label, count: counts.filter(row => row.weekday === item.value).reduce((sum, row) => sum + row.count, 0) })), responses };
   }
   api.get('/admin/priority-survey/results', auth.requireAdmin('read'), async (req, res) => res.json(await surveyResults(req)));
   api.get('/admin/priority-survey/export/:format', auth.requireAdmin('export'), async (req, res) => {
@@ -215,7 +216,7 @@ export async function installEngagement({ app, api, db, auth, mutate }) {
     need(['xlsx', 'docx'].includes(format), 'Format introuvable.', 404);
     const result = await surveyResults(req, true);
     const rows = result.responses.map(row => [row.name, row.email, frequencies.find(item => item.value === row.frequency)?.label,
-      weekdays.find(item => item.value === row.weekday)?.label, row.createdAt, row.birthdate || '', row.birthdatePurpose || '', row.consentedAt || '']);
+      allWeekdays.find(item => item.value === row.weekday)?.label, row.createdAt, row.birthdate || '', row.birthdatePurpose || '', row.consentedAt || '']);
     if (format === 'xlsx') {
       const book = new ExcelJS.Workbook();
       const sheet = book.addWorksheet('Fréquence des activités');

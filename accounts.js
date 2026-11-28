@@ -539,7 +539,7 @@ export async function installAccounts({ api, db, production, onStudentAuthentica
 
   api.get('/admin/session', async (req, res) => res.json(adminPayload(await admin(req, res))));
   api.get('/admin/system-status', requireAdmin('archive'), (_req, res) => res.json({
-    version: '2026.11.28.2', passwordRecovery: { enabled: passwordRecoveryEnabled,
+    version: '2026.11.28.3', passwordRecovery: { enabled: passwordRecoveryEnabled,
       missing: [!process.env.SMTP_HOST && 'SMTP_HOST', !process.env.SMTP_FROM && 'SMTP_FROM',
         !configuredPasswordOrigin && production && 'PUBLIC_URL'].filter(Boolean) },
     storage: { media: 'Base de données persistante', imageLimitMB: 5, videoLimitMB: 50 },

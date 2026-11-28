@@ -102,6 +102,8 @@ for (const dialect of ['sqlite', 'postgres']) {
       assert.equal(initial.data.responded, false);
       assert.equal(initial.data.response, null);
       survey = initial.data.survey;
+      assert.equal(survey.weekdays.length,6);
+      assert.equal(survey.weekdays.some(day=>day.value==='sunday'),false);
       const answer = { surveyId: survey.id, frequency: 'weekly', weekday: 'friday' };
       assert.equal((await visitor.request('/api/priority-survey/responses', { method: 'POST', body: answer })).status, 401);
       assert.equal((await viewer.request('/api/admin/priority-survey', { method: 'PUT', body: { status: 'paused' } })).status, 403);
@@ -117,6 +119,7 @@ for (const dialect of ['sqlite', 'postgres']) {
       assert.equal(survey.collectBirthdate, true);
       assert.equal((await first.request('/api/student/register', { method: 'POST', body: firstIdentity })).status, 201);
       assert.equal((await second.request('/api/student/register', { method: 'POST', body: secondIdentity })).status, 201);
+      assert.equal((await second.request('/api/priority-survey/responses', {method:'POST',body:{...answer,weekday:'sunday'}})).status,400);
       assert.equal((await second.request('/api/priority-survey/birthdate', {
         method: 'POST', body: { surveyId: survey.id, birthdate: '2003-04-18', birthdateConsent: true, birthdatePurpose: survey.birthdatePurpose },
       })).status, 409, 'le partage de la date nécessite une participation préalable au sondage');
@@ -336,6 +339,12 @@ for (const dialect of ['sqlite', 'postgres']) {
       const restoredOwner = client(origin, ownerCookies);
       assert.equal((await restoredOwner.request('/api/admin/dashboard')).data.activities.find(item => item.id === 'cinema').image, imageUrl);
       assert.equal((await restoredOwner.request('/api/admin/priority-survey/results')).data.total, 2);
+      const historicStudent = await db.prepare('SELECT id FROM student_accounts WHERE email=?').get(firstIdentity.email);
+      await db.prepare("UPDATE priority_responses SET weekday='sunday' WHERE student_id=?").run(historicStudent.id);
+      const historicResults=(await restoredOwner.request('/api/admin/priority-survey/results')).data;
+      assert.equal(historicResults.weekdays.find(day=>day.value==='sunday').count,1,'l’ancien dimanche reste comptabilisé');
+      assert.equal(historicResults.weekdays.reduce((sum,day)=>sum+day.count,0),historicResults.total);
+      assert.equal((await restoredPublic.request('/api/priority-survey')).data.survey.weekdays.some(day=>day.value==='sunday'),false);
       assert.equal(mailAttempts, 0);
     });
   });
