@@ -202,6 +202,9 @@
     ($('accueil-classique') || document.querySelector('main > section')).after(invitation); invitation.after(status);
     dialog = node('dialog', 'priority-dialog'); dialog.id = 'priority-dialog'; dialog.setAttribute('aria-labelledby', 'priority-title');
     dialog.innerHTML = `<div class="priority-layout"><div class="priority-form-panel"><div class="priority-progress" id="priority-progress"><span></span></div><p class="priority-step" id="priority-step-label" aria-live="polite"></p><div class="priority-perspective"><div class="priority-stage" id="priority-stage"><div class="priority-face priority-face-front" aria-hidden="true" inert></div><div class="priority-face priority-face-back" aria-hidden="true" inert></div></div></div></div><aside class="priority-editorial"><div class="priority-orbit" aria-hidden="true"></div><div class="priority-particles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><p class="priority-label">UATM GASA AKPAKPA</p><h2 id="priority-title"></h2><p id="priority-question" class="priority-editorial-question"></p><p id="priority-description"></p><span class="priority-editorial-note">Des idées. Des rencontres. Notre campus.</span></aside><button type="button" class="priority-close" id="priority-close" aria-label="Fermer le sondage"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></div><p class="priority-error" id="priority-error" role="alert" hidden></p>`;
+    const toolbar = node('div','priority-toolbar');
+    toolbar.append(dialog.querySelector('.priority-close'));
+    dialog.prepend(toolbar);
     document.body.append(dialog); $('priority-close').addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => clearTimeout(advanceTimer));
     const layout = dialog.querySelector('.priority-layout');

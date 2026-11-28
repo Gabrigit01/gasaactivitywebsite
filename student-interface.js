@@ -99,10 +99,10 @@
   function populatePrograms() {
     if (!programCatalog) return;
     for (const [id, items, placeholder] of [
-      ["student-program", programCatalog.programs.map(item => ({ value: String(item.id), label: item.name })), "Choisir un programme"],
-      ["student-study-year", programCatalog.years.map(year => ({ value: String(year), label: year + (year === 1 ? "re année" : "e année") })), "Choisir une année"],
-      ["student-academic-program", programCatalog.programs.map(item => ({ value: String(item.id), label: item.name })), "Choisir un programme"],
-      ["student-academic-year", programCatalog.years.map(year => ({ value: String(year), label: year + (year === 1 ? "re année" : "e année") })), "Choisir une année"],
+      ["student-program", programCatalog.programs.map(item => ({ value: String(item.id), label: item.name })), "Filière"],
+      ["student-study-year", programCatalog.years.map(year => ({ value: String(year), label: year + (year === 1 ? "re année" : "e année") })), "Année"],
+      ["student-academic-program", programCatalog.programs.map(item => ({ value: String(item.id), label: item.name })), "Filière"],
+      ["student-academic-year", programCatalog.years.map(year => ({ value: String(year), label: year + (year === 1 ? "re année" : "e année") })), "Année"],
     ]) {
       const select = $(id);
       if (!select) continue;
@@ -572,8 +572,8 @@
     registrationAcademic.innerHTML = `
       <legend>Votre parcours</legend>
       <div class="student-auth-field-grid">
-        <label for="student-program">Programme<select id="student-program" name="programId"><option value="">Choisir un programme</option></select></label>
-        <label for="student-study-year">Année<select id="student-study-year" name="studyYear"><option value="">Choisir une année</option></select></label>
+        <label for="student-program">Filière<select id="student-program" name="programId"><option value="">Filière</option></select></label>
+        <label for="student-study-year">Année<select id="student-study-year" name="studyYear"><option value="">Année</option></select></label>
       </div>
       <p class="student-dialog-note" id="student-program-status" role="status" hidden></p>
       <button type="button" class="student-password-link" id="student-program-retry" hidden>Réessayer le chargement</button>`;
@@ -640,8 +640,8 @@
       <p class="student-dialog-note">Retrouvez et mettez à jour votre programme et votre année d’études.</p>
       <fieldset id="student-academic-fields" class="student-auth-field-grid">
         <legend class="student-auth-sr-only">Scolarité</legend>
-        <label for="student-academic-program">Programme<select id="student-academic-program" name="programId" required><option value="">Choisir un programme</option></select></label>
-        <label for="student-academic-year">Année<select id="student-academic-year" name="studyYear" required><option value="">Choisir une année</option></select></label>
+        <label for="student-academic-program">Filière<select id="student-academic-program" name="programId" required><option value="">Filière</option></select></label>
+        <label for="student-academic-year">Année<select id="student-academic-year" name="studyYear" required><option value="">Année</option></select></label>
       </fieldset>
       <p id="student-academic-status" class="student-dialog-note" role="status" hidden></p>
       <div class="student-dialog-actions">
